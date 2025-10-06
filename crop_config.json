@@ -1,0 +1,32 @@
+{
+  "default": {
+    "size_fraction": 0.09,
+    "vertical_bias": 0.11,
+    "height_fraction": 2
+  },
+  "resolutions": {
+    "3840x2160": {
+      "size_fraction": 0.09,
+      "vertical_bias": 0.11,
+      "height_fraction": 2
+    }
+  },
+  "matching": {
+    "defend": {
+      "scale": 0.53,
+      "threshold": 0.8,
+      "hotkey": "e"
+    },
+    "execute": {
+      "scale": 1.0,
+      "threshold": 0.8,
+      "hotkey": "f"
+    },
+    "slice": {
+      "scale": 1.0,
+      "threshold": 0.8,
+      "hotkey": "f"
+    }
+  }
+}
+
