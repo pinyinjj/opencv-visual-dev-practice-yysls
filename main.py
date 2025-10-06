@@ -18,12 +18,7 @@ try:
     pdi.PAUSE = 0.0
 except Exception:
     pdi = None
-# --- auto-elevate as Administrator ---
-
-
-
-
-
+# (admin relaunch removed)
 # Crop configuration via external config only
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "crop_config.json")
 
@@ -35,14 +30,7 @@ BRIGHTNESS_GAMMA = 1.25
 # Preview toggle (True to show debug preview window, False for headless)
 PREVIEW_ENABLED = True
 
-# Multi-scale matching sweep
-SCALE_MIN = 0.80
-SCALE_MAX = 1.10
-SCALE_STEP = 0.05
-
-# Per-second best score accumulator
-WINDOW_BEST = {"score": 0.0, "name": None, "loc": None, "scale": 1.0}
-WINDOW_START_TS = time.time()
+# Toggle preview and key actions
 
 # Enable key actions after successful matches
 KEY_ACTIONS_ENABLED = True
@@ -61,11 +49,6 @@ def apply_brightness_correction(bgr_image: np.ndarray) -> np.ndarray:
     return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
 
  
-def _preprocess_gray_for_match(gray: np.ndarray) -> np.ndarray:
-    # No preprocessing needed for masked direct comparison (kept for compatibility)
-    return gray
-
-
 def _load_match_templates() -> list:
     """Load templates as BGR and use full-background masks for matching/overlay.
 
@@ -80,7 +63,6 @@ def _load_match_templates() -> list:
         os.path.join(templates_dir, "defend.png"),
         os.path.join(templates_dir, "execute.png"),
     ]
-    BLACK_THRESHOLD = 20  # kept for potential future use
     loaded = []  # entries: (name, tmpl_bgr, mask)
     for path in candidate_files:
         if os.path.exists(path):
@@ -98,7 +80,6 @@ def _load_match_templates() -> list:
             h, w = tmpl_bgr.shape[:2]
             mask = np.full((h, w), 255, dtype=np.uint8)
             loaded.append((os.path.basename(path), tmpl_bgr, mask))
-    print(f"templates_loaded: {len(loaded)} from {templates_dir}")
     return loaded
 
 
@@ -121,17 +102,8 @@ def _match_templates_on_frame(
             print("match_debug: no templates loaded, skip")
         return {}, None, {}
 
-    # Use raw color frame and gradient magnitude for matching (robust to brightness)
+    # Use raw color frame for matching
     frame_u8 = bgr_frame
-    frame_gray = cv2.cvtColor(frame_u8, cv2.COLOR_BGR2GRAY)
-    gx = cv2.Sobel(frame_gray, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(frame_gray, cv2.CV_32F, 0, 1, ksize=3)
-    frame_grad = cv2.magnitude(gx, gy)
-    # Normalize to 0-255 uint8 for template matching
-    frame_grad_u8 = cv2.normalize(frame_grad, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    if debug:
-        # match_debug disabled per request
-        pass
 
     # Track best score across all templates/scales for this frame
     scaled_for_preview: dict[str, np.ndarray] = {}
@@ -202,7 +174,7 @@ def _match_templates_on_frame(
             scaled_for_preview[name] = gray_preview_bgwhite
             if new_h > frame_u8.shape[0] or new_w > frame_u8.shape[1]:
                 continue
-            # Defend uses direct color matching on BGR with TM_CCORR_NORMED
+            # Direct color matching on BGR with TM_CCOEFF_NORMED
             work_tmpl_bgr = work_tmpl
             if work_tmpl_bgr.ndim == 2:
                 work_tmpl_bgr = cv2.cvtColor(work_tmpl_bgr, cv2.COLOR_GRAY2BGR)
@@ -234,9 +206,7 @@ def _match_templates_on_frame(
                     "mask": mask_resized,
                     "score": maxVal,
                 }
-            if debug:
-                # print disabled per request
-                pass
+            # no debug prints
 
             # Threshold-based: trigger only when >= local_threshold
             if maxVal >= local_threshold:
@@ -247,17 +217,6 @@ def _match_templates_on_frame(
                     else:
                         _trigger_key_action_async(name)
 
-    # Aggregate per-second best and print
-    global WINDOW_START_TS, WINDOW_BEST
-    now_ts = time.time()
-    if best_name is not None and best_score > WINDOW_BEST.get("score", 0.0):
-        WINDOW_BEST = {"score": best_score, "name": best_name, "loc": best_loc, "scale": best_scale}
-    if now_ts - WINDOW_START_TS >= 1.0:
-        b = WINDOW_BEST
-        if b.get("name") is not None:
-            print(f"best: {b['score']:.3f} ({b['name']}) at {b['loc']} scale={b['scale']:.2f}")
-        WINDOW_BEST = {"score": 0.0, "name": None, "loc": None, "scale": 1.0}
-        WINDOW_START_TS = now_ts
     # Return data; 仅暴露当前 best 的模板数据用于左侧叠加
     best_only = {best_name: per_template_best.get(best_name)} if best_name in per_template_best else {}
     return scaled_for_preview, best_overlay, best_only
@@ -266,10 +225,15 @@ def _match_templates_on_frame(
 def _trigger_key_action_async(name: str, override_key: Optional[str] = None) -> None:
     if pdi is None:
         return
+    # Only send keys when target window is foreground
+    if not is_process_foreground("yysls.exe"):
+        return
     n = name.lower()
     k = (override_key or ("e" if n == "defend.png" else "f")).lower()
     def worker():
         try:
+            if not is_process_foreground("yysls.exe"):
+                return
             print(f"press: {k}")
             pdi.press(k, _pause=False)
         except Exception:
@@ -326,48 +290,7 @@ def _compose_unified_preview(frame_bgr: np.ndarray, scaled: dict) -> np.ndarray:
     return combined
 
 
-def _overlay_best_match(frame_bgr: np.ndarray, overlay: Optional[dict]) -> np.ndarray:
-    """Blend best-match template onto frame at detected location for debugging.
-
-    - Draws a green rectangle around the match area
-    - Alpha blends the template (masked) onto the frame for visual verification
-    """
-    if overlay is None or frame_bgr is None or frame_bgr.size == 0:
-        return frame_bgr
-    x, y = overlay.get("loc", (0, 0))
-    tmpl: np.ndarray = overlay.get("tmpl")
-    mask: np.ndarray = overlay.get("mask")
-    if tmpl is None or mask is None:
-        return frame_bgr
-    h, w = tmpl.shape[:2]
-    H, W = frame_bgr.shape[:2]
-    if x < 0 or y < 0 or x + w > W or y + h > H:
-        return frame_bgr
-
-    out = frame_bgr.copy()
-    # rectangle + label with scale and score if present
-    score = overlay.get("score") if overlay else None
-    # Green by default; Red when score >= threshold (0.7)
-    color = (0, 0, 255) if (isinstance(score, (int, float)) and score >= 0.7) else (0, 255, 0)
-    cv2.rectangle(out, (x, y), (x + w, y + h), color, 2)
-    label = None
-    if overlay.get("scale") is not None or score is not None:
-        sc = overlay.get("scale")
-        sv = score
-        if sc is not None and sv is not None:
-            label = f"{sc:.2f} | {sv:.3f}"
-        elif sc is not None:
-            label = f"{sc:.2f}"
-        elif sv is not None:
-            label = f"{sv:.3f}"
-    if label:
-        cv2.putText(out, label, (x, max(0, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
-    # alpha blend masked region
-    roi = out[y:y+h, x:x+w]
-    alpha = (mask.astype(np.float32) / 255.0)[..., None]
-    blended = (roi.astype(np.float32) * (1.0 - 0.5 * alpha) + tmpl.astype(np.float32) * (0.5 * alpha)).astype(np.uint8)
-    out[y:y+h, x:x+w] = blended
-    return out
+## removed: _overlay_best_match (unused)
 
 
 def _overlay_per_template(frame_bgr: np.ndarray, per_template: dict) -> np.ndarray:
@@ -516,142 +439,10 @@ def nested_check_yysls() -> Tuple[bool, bool]:
     return True, active_foreground
 
 
-def show_screenshot_window() -> None:
-    """Capture the primary monitor and display the screenshot in a window."""
-
-    with mss.mss() as sct:
-        monitor = sct.monitors[1]  # primary monitor
-        mon_left = int(monitor.get("left", 0))
-        mon_top = int(monitor.get("top", 0))
-        mon_w = int(monitor.get("width", 0))
-        mon_h = int(monitor.get("height", 0))
-
-        # Load config and resolve params for current resolution
-        _, _, _, _, resolve_for = load_crop_config()
-        size_f, vertical_b, height_f = resolve_for(mon_w, mon_h)
-
-        # Compute crop width and height, with biased center
-        side = int(max(1, min(mon_w, mon_h) * float(size_f)))
-        crop_h = int(max(1, side * float(height_f)))
-        center_x = mon_left + mon_w // 2
-        center_y = mon_top + mon_h // 2 + int(mon_h * float(vertical_b))
-
-        # Top-left of the rectangle, clamped to monitor bounds
-        left = int(center_x - side // 2)
-        top = int(center_y - crop_h // 2)
-        left = max(mon_left, min(left, mon_left + mon_w - side))
-        top = max(mon_top, min(top, mon_top + mon_h - crop_h))
-
-        region = {"left": left, "top": top, "width": side, "height": crop_h}
-
-        shot = sct.grab(region)
-        bgr8 = np.array(shot)
-        bgr8 = cv2.cvtColor(bgr8, cv2.COLOR_BGRA2BGR)
-        bgr8 = apply_brightness_correction(bgr8)
-
-        # Save raw screenshot before processing
-        os.makedirs("results", exist_ok=True)
-        raw_path = os.path.join("results", "raw_screenshot.png")
-        cv2.imwrite(raw_path, bgr8)
-
-        # Show and save raw only (no HDR processing)
-        cv2.imshow("Screenshot", bgr8)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+## removed: show_screenshot_window (unused)
 
 
-def record_screenshot_video(
-    duration_seconds: Optional[int] = None,
-    fps: int = 20,
-) -> None:
-    """
-    Debug helper: preview the configured screen region as a video-like window only.
-    Does not save to disk. Press 'q' in the preview window to stop.
-    """
-
-    with mss.mss() as sct:
-        monitor = sct.monitors[1]
-        mon_left = int(monitor.get("left", 0))
-        mon_top = int(monitor.get("top", 0))
-        mon_w = int(monitor.get("width", 0))
-        mon_h = int(monitor.get("height", 0))
-
-        _, _, _, _, resolve_for = load_crop_config()
-        size_f, vertical_b, height_f = resolve_for(mon_w, mon_h)
-        side = int(max(1, min(mon_w, mon_h) * float(size_f)))
-        crop_h = int(max(1, side * float(height_f)))
-        center_x = mon_left + mon_w // 2
-        center_y = mon_top + mon_h // 2 + int(mon_h * float(vertical_b))
-
-        left = int(center_x - side // 2)
-        top = int(center_y - crop_h // 2)
-        left = max(mon_left, min(left, mon_left + mon_w - side))
-        top = max(mon_top, min(top, mon_top + mon_h - crop_h))
-
-        region = {"left": left, "top": top, "width": side, "height": crop_h}
-
-        # Load templates once
-        loaded_templates = _load_match_templates()
-
-        match_threshold = 0.8
-        match_interval_sec = 0.2
-        last_match_time = 0.0
-
-        try:
-            if duration_seconds is None:
-                # Record until 'q' pressed or interrupted
-                while True:
-                    frame_bgra = sct.grab(region)
-                    frame = np.array(frame_bgra)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-                    frame = apply_brightness_correction(frame)
-
-                    # Template matching at fixed interval
-                    now = time.time()
-                    if loaded_templates and (now - last_match_time) >= match_interval_sec:
-                        last_match_time = now
-                        latest_scaled, best_overlay, per_template = _match_templates_on_frame(frame, loaded_templates, match_threshold, debug=True)
-                    else:
-                        best_overlay = None
-                        per_template = {}
-
-                    frame_with_overlay = _overlay_best_match(frame, best_overlay)
-                    # Show only the current best template in the right preview column
-                    if best_overlay and best_overlay.get("name") in latest_scaled:
-                        preview_scaled = {best_overlay.get("name"): latest_scaled[best_overlay.get("name")]}
-                    else:
-                        preview_scaled = {}
-                    preview = _compose_unified_preview(frame_with_overlay, preview_scaled)
-                    cv2.imshow("Preview", preview)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
-            else:
-                total_frames = int(max(1, duration_seconds) * max(1, fps))
-                for _ in range(total_frames):
-                    frame_bgra = sct.grab(region)
-                    frame = np.array(frame_bgra)
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-                    frame = apply_brightness_correction(frame)
-
-                    now = time.time()
-                    if loaded_templates and (now - last_match_time) >= match_interval_sec:
-                        last_match_time = now
-                        latest_scaled, best_overlay, per_template = _match_templates_on_frame(frame, loaded_templates, match_threshold, debug=True)
-                    else:
-                        best_overlay = None
-                        per_template = {}
-
-                    frame_with_overlay = _overlay_best_match(frame, best_overlay)
-                    if best_overlay and best_overlay.get("name") in latest_scaled:
-                        preview_scaled = {best_overlay.get("name"): latest_scaled[best_overlay.get("name")]}
-                    else:
-                        preview_scaled = {}
-                    preview = _compose_unified_preview(frame_with_overlay, preview_scaled)
-                    cv2.imshow("Preview", preview)
-                    if cv2.waitKey(1) & 0xFF == ord('q'):
-                        break
-        finally:
-            cv2.destroyAllWindows()
+## removed: record_screenshot_video (unused)
 
 # Headless detection loop (no preview). Triggers actions on matches
 def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] = None) -> None:
@@ -713,11 +504,7 @@ def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] 
 
 
 if __name__ == "__main__":
-    exists, active = nested_check_yysls()
-    print(exists)
-    print(active)
-    # record_screenshot_video()  # preview disabled per request
     detect_loop()
-    # show_screenshot_window()
+
 
 
