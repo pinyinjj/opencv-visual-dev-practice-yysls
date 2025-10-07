@@ -67,15 +67,17 @@ def build_exe():
         # Check if executable was created
         exe_path = "dist/yysls-opencv-template.exe"
         if os.path.exists(exe_path):
-            print(f"✅ Executable created: {exe_path}")
+            print(f"Executable created: {exe_path}")
         else:
-            print(f"❌ Executable not found: {exe_path}")
+            print(f"Executable not found: {exe_path}")
             print("Checking dist directory contents:")
             if os.path.exists("dist"):
                 for file in os.listdir("dist"):
                     print(f"  - {file}")
             else:
                 print("  dist directory does not exist")
+            # Fail fast if the executable was not produced
+            sys.exit(1)
         
         # Get version info for output
         version = version_info.get("VERSION", "unknown")
@@ -92,7 +94,7 @@ def build_exe():
         
     except subprocess.CalledProcessError as e:
         print(f"Build failed: {e}")
-        return False
+        sys.exit(1)
     
     return True
 
