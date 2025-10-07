@@ -93,36 +93,36 @@ jobs:
         
         # Create README for release
         $readmeContent = @"
-# YYSLS OpenCV Template ${{ steps.version.outputs.VERSION_NUMBER }}
+        # YYSLS OpenCV Template ${{ steps.version.outputs.VERSION_NUMBER }}
 
-## 使用方法
+        ## 使用方法
 
-1. 运行 `yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe`
-2. 程序会要求管理员权限，请允许
-3. 启动后会显示系统通知
-4. 在系统托盘找到蓝色圆形图标
-5. 右键点击图标进行控制
+        1. 运行 `yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe`
+        2. 程序会要求管理员权限，请允许
+        3. 启动后会显示系统通知
+        4. 在系统托盘找到蓝色圆形图标
+        5. 右键点击图标进行控制
 
-## 功能
+        ## 功能
 
-- 自动QTE检测
-- 系统托盘控制
-- 预览窗口切换
-- 按键操作开关
-- 管理员权限运行
+        - 自动QTE检测
+        - 系统托盘控制
+        - 预览窗口切换
+        - 按键操作开关
+        - 管理员权限运行
 
-## 文件说明
+        ## 文件说明
 
-- `yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe` - 主程序
-- `crop_config.json` - 配置文件
-- `templates/` - 模板文件夹
+        - `yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe` - 主程序
+        - `crop_config.json` - 配置文件
+        - `templates/` - 模板文件夹
 
-## 版本信息
+        ## 版本信息
 
-- 版本: ${{ steps.version.outputs.VERSION_NUMBER }}
-- 构建时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-- 提交: ${{ github.sha }}
-"@
+        - 版本: ${{ steps.version.outputs.VERSION_NUMBER }}
+        - 构建时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+        - 提交: ${{ github.sha }}
+        "@
         $readmeContent | Out-File -FilePath "release\README.md" -Encoding UTF8
     
     - name: Create Git tag
