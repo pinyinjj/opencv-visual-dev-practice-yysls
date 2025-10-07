@@ -33,6 +33,7 @@ jobs:
     
     - name: Get version info
       id: version
+      shell: pwsh
       run: |
         # Get latest tag
         $latestTag = git describe --tags --abbrev=0 2>$null
@@ -67,6 +68,7 @@ jobs:
         echo "VERSION_NUMBER=$($newVersion -replace 'v', '')" >> $env:GITHUB_OUTPUT
     
     - name: Create version file
+      shell: pwsh
       run: |
         echo "VERSION=${{ steps.version.outputs.VERSION_NUMBER }}" > version.txt
         echo "BUILD_DATE=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" >> version.txt
@@ -77,6 +79,7 @@ jobs:
         python build_exe.py
     
     - name: Create release assets
+      shell: pwsh
       run: |
         # Create release directory
         mkdir release
@@ -89,7 +92,7 @@ jobs:
         xcopy "templates" "release\templates\" /E /I
         
         # Create README for release
-        @"
+        $readmeContent = @"
 # YYSLS OpenCV Template ${{ steps.version.outputs.VERSION_NUMBER }}
 
 ## 使用方法
@@ -119,7 +122,8 @@ jobs:
 - 版本: ${{ steps.version.outputs.VERSION_NUMBER }}
 - 构建时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 - 提交: ${{ github.sha }}
-"@ | Out-File -FilePath "release\README.md" -Encoding UTF8
+"@
+        $readmeContent | Out-File -FilePath "release\README.md" -Encoding UTF8
     
     - name: Create Git tag
       run: |
