@@ -23,7 +23,8 @@ env.bak/
 venv.bak/
 
 # PyInstaller
-*.manifest
+# Keep manifest for CI to embed admin privileges
+# *.manifest
 *.exe
 
 # IDE
