@@ -1,5 +1,8 @@
 name: Build and Release
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [ main ]
@@ -144,7 +147,8 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git tag ${{ steps.version.outputs.TAG_NAME }}
+        git tag -a ${{ steps.version.outputs.TAG_NAME }} -m "Release ${{ steps.version.outputs.TAG_NAME }}"
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/pinyinjj/opencv-visual-dev-practice-yysls.git
         git push origin ${{ steps.version.outputs.TAG_NAME }}
     
     - name: Create Release
