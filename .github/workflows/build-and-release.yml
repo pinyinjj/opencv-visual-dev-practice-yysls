@@ -1,0 +1,167 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      major_version:
+        description: 'Major version (e.g., 2.0.0) - leave empty for auto minor version'
+        required: false
+        type: string
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.13'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Get version info
+      id: version
+      run: |
+        # Get latest tag
+        $latestTag = git describe --tags --abbrev=0 2>$null
+        if (-not $latestTag) {
+          $latestTag = "v0.0.0"
+        }
+        Write-Host "Latest tag: $latestTag"
+        
+        # Extract version number
+        $versionNumber = $latestTag -replace "v", ""
+        $versionParts = $versionNumber -split "\."
+        $major = [int]$versionParts[0]
+        $minor = [int]$versionParts[1]
+        $patch = [int]$versionParts[2]
+        
+        # Check if major version is specified
+        $inputMajor = "${{ github.event.inputs.major_version }}"
+        if ($inputMajor -and $inputMajor -ne "") {
+          $newVersion = $inputMajor
+          Write-Host "Using specified major version: $newVersion"
+        } else {
+          # Auto increment minor version
+          $minor++
+          $patch = 0
+          $newVersion = "v$major.$minor.$patch"
+          Write-Host "Auto incrementing minor version: $newVersion"
+        }
+        
+        echo "VERSION=$newVersion" >> $env:GITHUB_OUTPUT
+        echo "TAG_NAME=$newVersion" >> $env:GITHUB_OUTPUT
+        echo "RELEASE_NAME=YYSLS OpenCV Template $newVersion" >> $env:GITHUB_OUTPUT
+        echo "VERSION_NUMBER=$($newVersion -replace 'v', '')" >> $env:GITHUB_OUTPUT
+    
+    - name: Create version file
+      run: |
+        echo "VERSION=${{ steps.version.outputs.VERSION_NUMBER }}" > version.txt
+        echo "BUILD_DATE=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" >> version.txt
+        echo "COMMIT_SHA=${{ github.sha }}" >> version.txt
+    
+    - name: Build executable
+      run: |
+        python build_exe.py
+    
+    - name: Create release assets
+      run: |
+        # Create release directory
+        mkdir release
+        
+        # Copy executable
+        copy "dist\yysls-opencv-template-v2.exe" "release\yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe"
+        
+        # Copy config and templates
+        copy "crop_config.json" "release\"
+        xcopy "templates" "release\templates\" /E /I
+        
+        # Create README for release
+        @"
+# YYSLS OpenCV Template ${{ steps.version.outputs.VERSION_NUMBER }}
+
+## 使用方法
+
+1. 运行 `yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe`
+2. 程序会要求管理员权限，请允许
+3. 启动后会显示系统通知
+4. 在系统托盘找到蓝色圆形图标
+5. 右键点击图标进行控制
+
+## 功能
+
+- 自动QTE检测
+- 系统托盘控制
+- 预览窗口切换
+- 按键操作开关
+- 管理员权限运行
+
+## 文件说明
+
+- `yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe` - 主程序
+- `crop_config.json` - 配置文件
+- `templates/` - 模板文件夹
+
+## 版本信息
+
+- 版本: ${{ steps.version.outputs.VERSION_NUMBER }}
+- 构建时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+- 提交: ${{ github.sha }}
+"@ | Out-File -FilePath "release\README.md" -Encoding UTF8
+    
+    - name: Create Git tag
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git tag ${{ steps.version.outputs.TAG_NAME }}
+        git push origin ${{ steps.version.outputs.TAG_NAME }}
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.TAG_NAME }}
+        name: ${{ steps.version.outputs.RELEASE_NAME }}
+        body: |
+          ## 🚀 新版本发布
+          
+          ### 主要功能
+          - ✅ 自动QTE检测
+          - ✅ 系统托盘控制
+          - ✅ 预览窗口切换
+          - ✅ 按键操作开关
+          - ✅ 管理员权限运行
+          
+          ### 使用方法
+          1. 下载 `yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe`
+          2. 下载 `crop_config.json` 和 `templates/` 文件夹
+          3. 将所有文件放在同一目录
+          4. 运行可执行文件
+          
+          ### 版本信息
+          - **版本**: ${{ steps.version.outputs.VERSION_NUMBER }}
+          - **构建时间**: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+          - **提交**: ${{ github.sha }}
+          
+          ### 更新日志
+          - 重构代码架构，移除全局变量
+          - 添加系统托盘功能
+          - 实现启动通知
+          - 优化构建流程
+        files: |
+          release/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

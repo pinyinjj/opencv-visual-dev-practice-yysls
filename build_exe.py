@@ -4,9 +4,20 @@ Build script for creating executable from yysls-opencv-template
 import os
 import subprocess
 import sys
+import json
+from datetime import datetime
 
 def build_exe():
     """Build executable using PyInstaller for yysls-opencv-template"""
+    
+    # Load version info if available
+    version_info = {}
+    if os.path.exists("version.txt"):
+        with open("version.txt", "r", encoding="utf-8") as f:
+            for line in f:
+                if "=" in line:
+                    key, value = line.strip().split("=", 1)
+                    version_info[key] = value
     
     # Check if PyInstaller is installed
     try:
@@ -27,6 +38,13 @@ def build_exe():
     try:
         subprocess.check_call(cmd)
         print("\n✅ Build completed successfully!")
+        
+        # Get version info for output
+        version = version_info.get("VERSION", "unknown")
+        build_date = version_info.get("BUILD_DATE", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        
+        print(f"📦 Version: {version}")
+        print(f"📅 Build Date: {build_date}")
         print("📁 Executable location: dist/yysls-opencv-template-v2.exe")
         print("\n📋 Usage:")
         print("1. Copy dist/yysls-opencv-template-v2.exe to your desired location")
