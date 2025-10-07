@@ -651,6 +651,7 @@ def show_startup_notification():
         print(f"通知发送失败: {e}")
         # Fallback to simple print
         print("🔔 YYSLS OpenCV Template - 自动QTE检测已启动，可通过系统托盘控制")
+        print("📝 版本: 1.0.1 - 测试GitHub Actions构建")
 
 def main():
     """Main function with tray icon"""
