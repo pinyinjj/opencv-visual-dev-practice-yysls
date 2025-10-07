@@ -13,48 +13,56 @@ import threading
 import mss
 import cv2
 import numpy as np
-try:
-    import pydirectinput as pdi  # from pydirectinput-rgx
-    pdi.PAUSE = 0.0
-except Exception:
-    pdi = None
-# (admin relaunch removed)
-# Crop configuration via external config only
+import pydirectinput as pdi
+import pystray
+from PIL import Image, ImageDraw
+import sys
+pdi.PAUSE = 0.0
+
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "crop_config.json")
 
-# Brightness correction (applied to screenshots and recordings)
-# gain < 1.0 will darken linearly; gamma > 1.0 will also darken mid/highlights
-BRIGHTNESS_GAIN = 0.75
-BRIGHTNESS_GAMMA = 1.25
+# Application state class
+class AppState:
+    def __init__(self):
+        self.config = {}
+        self.preview_enabled = False
+        self.key_actions_enabled = True
+        self.running = True
+        self.tray_icon = None
+        self.detection_thread = None
+        self.template_cache = {}
 
-# Preview toggle (True to show debug preview window, False for headless)
-PREVIEW_ENABLED = True
+# Global application state instance
+app_state = AppState()
 
-# Toggle preview and key actions
-
-# Enable key actions after successful matches
-KEY_ACTIONS_ENABLED = True
 
 
 def apply_brightness_correction(bgr_image: np.ndarray) -> np.ndarray:
-    """Darken image using linear gain and gamma to reduce perceived brightness."""
+    """Apply linear gain and gamma to reduce perceived brightness.
+
+    Parameters
+    - bgr_image: Input image in BGR8 format.
+
+    Returns
+    - Brightness-adjusted BGR8 image.
+    """
 
     if bgr_image is None or bgr_image.size == 0:
         return bgr_image
     img = bgr_image.astype(np.float32) / 255.0
-    # Linear gain
-    img *= float(BRIGHTNESS_GAIN)
-    # Gamma correction (gamma>1 darkens)
-    img = np.power(np.clip(img, 0.0, 1.0), float(BRIGHTNESS_GAMMA))
+    settings = (app_state.config.get("settings") or {}) if isinstance(app_state.config, dict) else {}
+    gain = float(settings.get("brightness_gain", 1.0))
+    gamma = float(settings.get("brightness_gamma", 1.0))
+    img *= gain
+    img = np.power(np.clip(img, 0.0, 1.0), gamma)
     return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
 
  
 def _load_match_templates() -> list:
-    """Load templates as BGR and use full-background masks for matching/overlay.
+    """Load available templates as BGR and 8-bit masks.
 
-    - Keep actual BGR pixels (with their backgrounds)
-    - Do not hollow out backgrounds; avoid Otsu masking to reduce false matches
-    - Returned entries: (name, template_bgr, mask_uint8_full)
+    Returns
+    - List of tuples: (filename, template_bgr, mask_uint8)
     """
 
     templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -83,27 +91,79 @@ def _load_match_templates() -> list:
     return loaded
 
 
+## Pre-scaled per-template cache (built once per run based on config)
+
+def _build_template_cache(loaded_templates: list) -> None:
+    """Build and cache per-template resized assets and parameters.
+
+    Caches for each template name:
+    - tmpl_bgr_resized: resized BGR template for overlay
+    - tmpl_gray: resized grayscale template for matching
+    - mask: resized uint8 mask
+    - preview: grayscale preview with background set to white
+    - scale, threshold, hotkey: parameters from config (with defaults)
+    """
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f) or {}
+    except Exception:
+        cfg = {}
+    m_all = cfg.get("matching", {})
+
+    for entry in loaded_templates:
+        name, tmpl_bgr, tmpl_mask = entry
+        nm = name.lower()
+        if nm not in ("defend.png", "execute.png", "slice.png"):
+            continue
+        key = (
+            "defend" if nm == "defend.png" else
+            ("execute" if nm == "execute.png" else
+             ("slice" if nm == "slice.png" else None))
+        )
+        m = m_all.get(key, {}) if key else {}
+        default_scale = 0.53 if nm == "defend.png" else 1.0
+        scale = float(m.get("scale", default_scale))
+        threshold = float(m.get("threshold", 0.8))
+        hotkey = m.get("hotkey")
+
+        th, tw = tmpl_bgr.shape[:2]
+        new_w = max(1, int(round(tw * max(scale, 1e-3))))
+        new_h = max(1, int(round(th * max(scale, 1e-3))))
+
+        resized_bgr = cv2.resize(tmpl_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        resized_mask = cv2.resize(tmpl_mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+        tmpl_gray = cv2.cvtColor(resized_bgr, cv2.COLOR_BGR2GRAY)
+        gray_preview = tmpl_gray.copy()
+        if resized_mask is not None:
+            gray_preview[resized_mask == 0] = 255
+
+        app_state.template_cache[name] = {
+            "tmpl_bgr_resized": resized_bgr,
+            "tmpl_gray": tmpl_gray,
+            "mask": resized_mask,
+            "preview": gray_preview,
+            "scale": scale,
+            "threshold": threshold,
+            "hotkey": hotkey,
+        }
+
 def _match_templates_on_frame(
     bgr_frame: np.ndarray,
     loaded_templates: list,
-    threshold: float = 0.6,
-    debug: bool = True,
 ) -> tuple[dict, Optional[dict], dict]:
-    """Run template matching per-template and return scaled templates for preview.
+    """Match configured templates on a single BGR frame using grayscale CCOEFF_NORMED.
 
-    - defend.png: fixed scale=0.6, threshold=0.6
-    - exe.png: fixed scale=1.0 (current setting)
-    - others: multi-scale exploration, use provided threshold
-    Returns a dict name->scaled_template (grayscale, masked) for unified preview.
+    Returns:
+    - scaled_for_preview: dict[name -> gray template preview]
+    - best_overlay: optional metadata for the globally best match
+    - per_template_best_best_only: dict[name -> best match metadata] (best only)
     """
 
     if not loaded_templates:
-        if debug:
-            print("match_debug: no templates loaded, skip")
         return {}, None, {}
 
-    # Use raw color frame for matching
     frame_u8 = bgr_frame
+    frame_gray = cv2.cvtColor(frame_u8, cv2.COLOR_BGR2GRAY)
 
     # Track best score across all templates/scales for this frame
     scaled_for_preview: dict[str, np.ndarray] = {}
@@ -116,116 +176,82 @@ def _match_templates_on_frame(
 
     for entry in loaded_templates:
         name, tmpl_bgr, tmpl_mask = entry
-        th, tw = tmpl_bgr.shape[:2]
-        # Evaluate defend/execute/slice; apply per-template overrides from config
         nm = name.lower()
         if nm not in ("defend.png", "execute.png", "slice.png"):
             continue
-        scale_val = None
-        thresh_val = None
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                cfg = json.load(f) or {}
-            m_all = cfg.get("matching", {})
-            key = (
-                "defend" if nm == "defend.png" else
-                ("execute" if nm == "execute.png" else
-                 ("slice" if nm == "slice.png" else None))
-            )
-            if key:
-                m = m_all.get(key, {})
-                if isinstance(m.get("scale"), (int, float)):
-                    scale_val = float(m["scale"])
-                if isinstance(m.get("threshold"), (int, float)):
-                    thresh_val = float(m["threshold"])
-                hotkey = m.get("hotkey")
-        except Exception:
-            pass
-        if nm == "defend.png":
-            scales = [scale_val if scale_val is not None else 0.53]
-            local_threshold = thresh_val if thresh_val is not None else 0.8
-        elif nm == "execute.png":
-            scales = [scale_val if scale_val is not None else 1.0]
-            local_threshold = thresh_val if thresh_val is not None else 0.8
-        else:  # slice.png
-            scales = [scale_val if scale_val is not None else 1.0]
-            local_threshold = thresh_val if thresh_val is not None else 0.8
+        # Ensure cache exists for this template
+        cache = app_state.template_cache.get(name)
+        if cache is None:
+            _build_template_cache([entry])
+            cache = app_state.template_cache.get(name)
+        if cache is None:
+            continue
 
-        for s in scales:
-            # Scale based on template's own dimensions (not frame ratio)
-            scale = max(float(s), 1e-3)
-            new_w = max(1, int(round(tw * scale)))
-            new_h = max(1, int(round(th * scale)))
-            work_tmpl = cv2.resize(tmpl_bgr, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            # Build grayscale preview masked to content regions
-            gray_preview = cv2.cvtColor(work_tmpl, cv2.COLOR_BGR2GRAY)
-            # Compute gradient magnitude for template
-            tgx = cv2.Sobel(gray_preview, cv2.CV_32F, 1, 0, ksize=3)
-            tgy = cv2.Sobel(gray_preview, cv2.CV_32F, 0, 1, ksize=3)
-            tmpl_grad = cv2.magnitude(tgx, tgy)
-            tmpl_grad_u8 = cv2.normalize(tmpl_grad, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            mask_resized = cv2.resize(tmpl_mask, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-            # Make masked-out regions white (255) for better visibility in preview
-            gray_preview_bgwhite = gray_preview.copy()
-            # With full mask, preview is unchanged; keep logic for consistency
-            if mask_resized is not None:
-                gray_preview_bgwhite[mask_resized == 0] = 255
-            # Store latest scaled preview image (grayscale)
-            scaled_for_preview[name] = gray_preview_bgwhite
-            if new_h > frame_u8.shape[0] or new_w > frame_u8.shape[1]:
-                continue
-            # Direct color matching on BGR with TM_CCOEFF_NORMED
-            work_tmpl_bgr = work_tmpl
-            if work_tmpl_bgr.ndim == 2:
-                work_tmpl_bgr = cv2.cvtColor(work_tmpl_bgr, cv2.COLOR_GRAY2BGR)
-            res = cv2.matchTemplate(frame_u8, work_tmpl_bgr, cv2.TM_CCOEFF_NORMED)
-            _, maxVal, _, maxLoc = cv2.minMaxLoc(res)
+        work_tmpl_bgr = cache["tmpl_bgr_resized"]
+        work_tmpl_gray = cache["tmpl_gray"]
+        mask_resized = cache["mask"]
+        local_threshold = float(cache.get("threshold", 0.8))
+        hotkey = cache.get("hotkey")
 
-            # Update current best score for this frame
-            if maxVal > best_score:
-                best_score = maxVal
-                best_name = name
-                best_loc = maxLoc
-                best_scale = s
-                best_overlay = {
-                    "name": name,
-                    "loc": maxLoc,
-                    "scale": s,
-                    "tmpl": work_tmpl,
-                    "mask": mask_resized,
-                    "score": maxVal,
-                }
-            # Track best per-template
-            prev = per_template_best.get(name)
-            if prev is None or maxVal > prev.get("score", 0.0):
-                per_template_best[name] = {
-                    "name": name,
-                    "loc": maxLoc,
-                    "scale": s,
-                    "tmpl": work_tmpl,
-                    "mask": mask_resized,
-                    "score": maxVal,
-                }
-            # no debug prints
+        h_t, w_t = work_tmpl_gray.shape[:2]
+        scaled_for_preview[name] = cache["preview"]
+        if h_t > frame_gray.shape[0] or w_t > frame_gray.shape[1]:
+            continue
 
-            # Threshold-based: trigger only when >= local_threshold
-            if maxVal >= local_threshold:
-                if KEY_ACTIONS_ENABLED:
-                    # Use configured hotkey if present, else fall back by template name
-                    if 'hotkey' in locals() and isinstance(hotkey, str) and len(hotkey) > 0:
-                        _trigger_key_action_async(name, hotkey)
-                    else:
-                        _trigger_key_action_async(name)
+        # Grayscale normalized correlation
+        res = cv2.matchTemplate(frame_gray, work_tmpl_gray, cv2.TM_CCOEFF_NORMED)
+        _, maxVal, _, maxLoc = cv2.minMaxLoc(res)
 
-    # Return data; 仅暴露当前 best 的模板数据用于左侧叠加
+        # Update current best score for this frame
+        if maxVal > best_score:
+            best_score = maxVal
+            best_name = name
+            best_loc = maxLoc
+            best_scale = float(cache.get("scale", 1.0))
+            best_overlay = {
+                "name": name,
+                "loc": maxLoc,
+                "scale": best_scale,
+                "tmpl": work_tmpl_bgr,
+                "mask": mask_resized,
+                "score": maxVal,
+                "threshold": local_threshold,
+            }
+        # Track best per-template
+        prev = per_template_best.get(name)
+        if prev is None or maxVal > prev.get("score", 0.0):
+            per_template_best[name] = {
+                "name": name,
+                "loc": maxLoc,
+                "scale": best_scale,
+                "tmpl": work_tmpl_bgr,
+                "mask": mask_resized,
+                "score": maxVal,
+                "threshold": local_threshold,
+            }
+        
+        # Threshold-based key action
+        if maxVal >= local_threshold:
+            if app_state.key_actions_enabled:
+                if 'hotkey' in locals() and isinstance(hotkey, str) and len(hotkey) > 0:
+                    _trigger_key_action_async(name, hotkey)
+                else:
+                    _trigger_key_action_async(name)
+
+    # 仅暴露当前 best 的模板数据用于左侧叠加
     best_only = {best_name: per_template_best.get(best_name)} if best_name in per_template_best else {}
     return scaled_for_preview, best_overlay, best_only
 
 
 def _trigger_key_action_async(name: str, override_key: Optional[str] = None) -> None:
+    """Send a configured key asynchronously when yysls.exe is foreground.
+
+    Parameters
+    - name: Template filename identifying the action.
+    - override_key: Optional explicit key to send; falls back by template.
+    """
     if pdi is None:
         return
-    # Only send keys when target window is foreground
     if not is_process_foreground("yysls.exe"):
         return
     n = name.lower()
@@ -242,7 +268,7 @@ def _trigger_key_action_async(name: str, override_key: Optional[str] = None) -> 
 
 
 def _compose_unified_preview(frame_bgr: np.ndarray, scaled: dict) -> np.ndarray:
-    """Stack video frame with scaled templates into one preview image. Hide slice."""
+    """Compose frame and scaled template previews into a single image."""
     if frame_bgr is None or frame_bgr.size == 0:
         return frame_bgr
     tiles: list[np.ndarray] = []
@@ -290,17 +316,8 @@ def _compose_unified_preview(frame_bgr: np.ndarray, scaled: dict) -> np.ndarray:
     return combined
 
 
-## removed: _overlay_best_match (unused)
-
-
 def _overlay_per_template(frame_bgr: np.ndarray, per_template: dict) -> np.ndarray:
-    """Draw colored boxes for each template's best match and lightly blend template.
-
-    Colors:
-    - slice.png: blue (255, 0, 0)
-    - defend.png: green (0, 255, 0)
-    - execute.png: red (0, 0, 255)
-    """
+    """Render per-template best match rectangles and light template blends."""
     if frame_bgr is None or frame_bgr.size == 0 or not per_template:
         return frame_bgr
     out = frame_bgr.copy()
@@ -314,9 +331,9 @@ def _overlay_per_template(frame_bgr: np.ndarray, per_template: dict) -> np.ndarr
         h, w = tmpl.shape[:2]
         if x < 0 or y < 0 or x + w > W or y + h > H:
             continue
-        # Green by default; Red when score >= threshold (0.7)
         score = data.get("score")
-        color = (0, 0, 255) if (isinstance(score, (int, float)) and score >= 0.7) else (0, 255, 0)
+        thr = data.get("threshold", 0.7)
+        color = (0, 0, 255) if (isinstance(score, (int, float)) and isinstance(thr, (int, float)) and score >= float(thr)) else (0, 255, 0)
         cv2.rectangle(out, (x, y), (x + w, y + h), color, 2)
         # very light blend to preserve FPS
         roi = out[y:y+h, x:x+w]
@@ -325,7 +342,7 @@ def _overlay_per_template(frame_bgr: np.ndarray, per_template: dict) -> np.ndarr
     return out
 
 def load_crop_config() -> Tuple[float, float, float]:
-    """Load crop config; prefer current resolution match, else default."""
+    """Load crop parameters and provide a resolver for current resolution."""
     # Minimal inline fallback (used only if config missing)
     size_frac = 0.09
     vertical_bias = 0.11
@@ -349,8 +366,15 @@ def load_crop_config() -> Tuple[float, float, float]:
             pass
         return size_frac, vertical_bias, height_frac
 
-    default = cfg.get("default", {})
+    # settings overrides
+    settings = cfg.get("settings", {})
+    app_state.config = cfg
+    app_state.preview_enabled = bool(settings.get("preview_enabled", False))
+    app_state.key_actions_enabled = bool(settings.get("key_actions_enabled", True))
+    fps = int(settings.get("fps", 10))
+
     res_map = cfg.get("resolutions", {})
+    default = res_map.get("default", {})
 
     # Detect current primary monitor resolution via mss later in call site
     def resolve_for(mon_w: int, mon_h: int) -> Tuple[float, float, float]:
@@ -374,12 +398,12 @@ def load_crop_config() -> Tuple[float, float, float]:
         print(f"height_fraction: {params[2]}")
         return params
 
-    return size_frac, vertical_bias, height_frac, cfg, resolve_for
+    return size_frac, vertical_bias, height_frac, cfg, resolve_for, fps
 
 
 
 def get_foreground_pid() -> Optional[int]:
-    """Return PID of the foreground window's process, or None if unavailable."""
+    """Get PID for the foreground window process, if available."""
 
     hwnd = GetForegroundWindow()
     if not hwnd:
@@ -392,7 +416,7 @@ def get_foreground_pid() -> Optional[int]:
 
 
 def get_process_image_name(pid: int) -> Optional[str]:
-    """Return the basename (lowercase) of the process image for the given PID."""
+    """Get lowercase image name for the given PID, or None on failure."""
 
     try:
         proc = psutil.Process(pid)
@@ -402,7 +426,7 @@ def get_process_image_name(pid: int) -> Optional[str]:
 
 
 def any_process_named(process_name: str) -> bool:
-    """Return True if any running process has the given image name (case-insensitive)."""
+    """Check if any running process matches the given image name (case-insensitive)."""
 
     target = process_name.lower()
     for proc in psutil.process_iter(["name"]):
@@ -416,7 +440,7 @@ def any_process_named(process_name: str) -> bool:
 
 
 def is_process_foreground(process_name: str) -> bool:
-    """Return True if the foreground process image name matches process_name."""
+    """Determine whether the foreground process name equals the provided name."""
 
     pid = get_foreground_pid()
     if pid is None:
@@ -428,7 +452,7 @@ def is_process_foreground(process_name: str) -> bool:
 
 
 def nested_check_yysls() -> Tuple[bool, bool]:
-    """Nested check: (exists_running, is_foreground)."""
+    """Check whether yysls.exe exists and whether it is foreground."""
 
     name = "yysls.exe"
     exists_running = any_process_named(name)
@@ -439,13 +463,60 @@ def nested_check_yysls() -> Tuple[bool, bool]:
     return True, active_foreground
 
 
-## removed: show_screenshot_window (unused)
+def create_tray_icon():
+    """Create system tray icon"""
+    # Create a simple icon
+    image = Image.new('RGB', (64, 64), color='blue')
+    draw = ImageDraw.Draw(image)
+    draw.ellipse([16, 16, 48, 48], fill='white', outline='black')
+    draw.text((20, 20), "自动QTE", fill='black')
+    
+    # Create menu with dynamic status
+    menu = pystray.Menu(
+        pystray.MenuItem("状态: 运行中", lambda: None),
+        pystray.MenuItem(lambda text: f"切换预览 ({'开' if app_state.preview_enabled else '关'})", toggle_preview),
+        pystray.MenuItem(lambda text: f"切换按键操作 ({'开' if app_state.key_actions_enabled else '关'})", toggle_key_actions),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("退出", quit_app)
+    )
+    
+    return pystray.Icon("yysls-opencv-template", image, "YYSLS OpenCV Template", menu)
 
+def toggle_preview(icon, item):
+    """Toggle preview window"""
+    app_state.preview_enabled = not app_state.preview_enabled
+    print(f"预览窗口: {'开启' if app_state.preview_enabled else '关闭'}")
+    # Update menu to reflect new status
+    update_tray_menu()
 
-## removed: record_screenshot_video (unused)
+def toggle_key_actions(icon, item):
+    """Toggle key actions"""
+    app_state.key_actions_enabled = not app_state.key_actions_enabled
+    print(f"按键操作: {'开启' if app_state.key_actions_enabled else '关闭'}")
+    # Update menu to reflect new status
+    update_tray_menu()
 
-# Headless detection loop (no preview). Triggers actions on matches
-def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] = None) -> None:
+def update_tray_menu():
+    """Update tray menu to reflect current status"""
+    if app_state.tray_icon:
+        # Create new menu with updated status
+        menu = pystray.Menu(
+            pystray.MenuItem("状态: 运行中", lambda: None),
+            pystray.MenuItem(lambda text: f"切换预览 ({'开' if app_state.preview_enabled else '关'})", toggle_preview),
+            pystray.MenuItem(lambda text: f"切换按键操作 ({'开' if app_state.key_actions_enabled else '关'})", toggle_key_actions),
+            pystray.Menu.SEPARATOR,
+            pystray.MenuItem("退出", quit_app)
+        )
+        app_state.tray_icon.menu = menu
+
+def quit_app(icon, item):
+    """Quit application"""
+    app_state.running = False
+    icon.stop()
+    sys.exit(0)
+
+def detect_loop_tray() -> None:
+    """Run the main capture/match loop with tray control."""
     with mss.mss() as sct:
         monitor = sct.monitors[1]
         mon_left = int(monitor.get("left", 0))
@@ -453,7 +524,7 @@ def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] 
         mon_w = int(monitor.get("width", 0))
         mon_h = int(monitor.get("height", 0))
 
-        _, _, _, _, resolve_for = load_crop_config()
+        _, _, _, _, resolve_for, fps = load_crop_config()
         size_f, vertical_b, height_f = resolve_for(mon_w, mon_h)
         side = int(max(1, min(mon_w, mon_h) * float(size_f)))
         crop_h = int(max(1, side * float(height_f)))
@@ -468,12 +539,72 @@ def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] 
         region = {"left": left, "top": top, "width": side, "height": crop_h}
 
         loaded_templates = _load_match_templates()
-        match_threshold = 0.7
-        match_interval_sec = 0.1
+        _build_template_cache(loaded_templates)
+        interval = 1.0 / max(1, fps)
         last_match_time = 0.0
         latest_scaled: dict = {}
+        per_template: dict = {}
+
+        start = time.time()
+        while app_state.running:
+            frame_bgra = sct.grab(region)
+            frame = np.array(frame_bgra)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+            frame = apply_brightness_correction(frame)
+
+            loop_start = time.time()
+            now = loop_start
+            if loaded_templates and (now - last_match_time) >= interval:
+                last_match_time = now
+                latest_scaled, best_overlay, per_template = _match_templates_on_frame(frame, loaded_templates)
+
+            # show preview window for debugging (video + scaled templates)
+            if app_state.preview_enabled:
+                frame_with_overlay = _overlay_per_template(frame, per_template)
+                preview_img = _compose_unified_preview(frame_with_overlay, latest_scaled)
+                cv2.imshow("Preview", preview_img)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
+            # pacing both capture and matching to the same fps
+            sleep_s = interval - (time.time() - loop_start)
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+        
+        if app_state.preview_enabled:
+            cv2.destroyAllWindows()
+
+def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] = None) -> None:
+    """Run the main capture/match loop with optional preview window."""
+    with mss.mss() as sct:
+        monitor = sct.monitors[1]
+        mon_left = int(monitor.get("left", 0))
+        mon_top = int(monitor.get("top", 0))
+        mon_w = int(monitor.get("width", 0))
+        mon_h = int(monitor.get("height", 0))
+
+        _, _, _, _, resolve_for, fps = load_crop_config()
+        size_f, vertical_b, height_f = resolve_for(mon_w, mon_h)
+        side = int(max(1, min(mon_w, mon_h) * float(size_f)))
+        crop_h = int(max(1, side * float(height_f)))
+        center_x = mon_left + mon_w // 2
+        center_y = mon_top + mon_h // 2 + int(mon_h * float(vertical_b))
+
+        left = int(center_x - side // 2)
+        top = int(center_y - crop_h // 2)
+        left = max(mon_left, min(left, mon_left + mon_w - side))
+        top = max(mon_top, min(top, mon_top + mon_h - crop_h))
+
+        region = {"left": left, "top": top, "width": side, "height": crop_h}
+
+        loaded_templates = _load_match_templates()
+        _build_template_cache(loaded_templates)
+        interval = 1.0 / max(1, fps)
+        last_match_time = 0.0
+        latest_scaled: dict = {}
+        per_template: dict = {}
         if preview is None:
-            preview = PREVIEW_ENABLED
+            preview = app_state.preview_enabled
 
         start = time.time()
         while True:
@@ -482,10 +613,11 @@ def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] 
             frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
             frame = apply_brightness_correction(frame)
 
-            now = time.time()
-            if loaded_templates and (now - last_match_time) >= match_interval_sec:
+            loop_start = time.time()
+            now = loop_start
+            if loaded_templates and (now - last_match_time) >= interval:
                 last_match_time = now
-                latest_scaled, best_overlay, per_template = _match_templates_on_frame(frame, loaded_templates, match_threshold, debug=False)
+                latest_scaled, best_overlay, per_template = _match_templates_on_frame(frame, loaded_templates)
 
             # show preview window for debugging (video + scaled templates)
             if preview:
@@ -497,14 +629,46 @@ def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] 
 
             if duration_seconds is not None and (now - start) >= duration_seconds:
                 break
+            # pacing both capture and matching to the same fps
+            sleep_s = interval - (time.time() - loop_start)
+            if sleep_s > 0:
+                time.sleep(sleep_s)
         if preview:
             cv2.destroyAllWindows()
 
-# (HDR-related code removed by request)
+def show_startup_notification():
+    """Show system notification when application starts"""
+    try:
+        # Use Windows message box for notification
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(
+            0, 
+            "自动QTE检测已启动，可通过系统托盘控制", 
+            "YYSLS OpenCV Template", 
+            0x40  # MB_ICONINFORMATION
+        )
+    except Exception as e:
+        print(f"通知发送失败: {e}")
+        # Fallback to simple print
+        print("🔔 YYSLS OpenCV Template - 自动QTE检测已启动，可通过系统托盘控制")
 
+def main():
+    """Main function with tray icon"""
+    # Show startup notification
+    show_startup_notification()
+    
+    # Create and start tray icon
+    app_state.tray_icon = create_tray_icon()
+    
+    # Start detection in a separate thread
+    app_state.detection_thread = threading.Thread(target=detect_loop_tray, daemon=True)
+    app_state.detection_thread.start()
+    
+    # Run tray icon (this blocks until quit)
+    app_state.tray_icon.run()
 
 if __name__ == "__main__":
-    detect_loop()
+    main()
 
 
 

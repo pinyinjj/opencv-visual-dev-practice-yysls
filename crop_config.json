@@ -1,15 +1,28 @@
 {
-  "default": {
-    "size_fraction": 0.09,
-    "vertical_bias": 0.11,
-    "height_fraction": 2
-  },
   "resolutions": {
+    "description": "Per-resolution crop presets. Use 'default' when no exact match.",
+    "default": {
+      "size_fraction": 0.09,
+      "vertical_bias": 0.11,
+      "height_fraction": 2,
+      "description": "Fallback preset when current resolution is not listed."
+    },
     "3840x2160": {
       "size_fraction": 0.09,
       "vertical_bias": 0.11,
       "height_fraction": 2
     }
+  },
+  "settings": {
+    "description": "Runtime toggles and image adjustments.",
+    "brightness_gain": 0.75,
+    "brightness_gain_desc": "Linear multiplier applied before gamma. <1.0 darkens globally; >1.0 brightens.",
+    "brightness_gamma": 1.25,
+    "brightness_gamma_desc": "Gamma exponent applied after gain. >1.0 darkens mid/highlights; <1.0 brightens.",
+    "preview_enabled": false,
+    "key_actions_enabled": true,
+    "fps": 10,
+    "fps_desc": "Unified rate for capture and matching (frames per second). Lower to reduce CPU/GPU load."
   },
   "matching": {
     "defend": {
