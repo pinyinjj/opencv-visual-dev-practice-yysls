@@ -85,7 +85,14 @@ jobs:
         mkdir release
         
         # Copy executable
-        copy "dist\yysls-opencv-template-v2.exe" "release\yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe"
+        if (Test-Path "dist\yysls-opencv-template.exe") {
+          copy "dist\yysls-opencv-template.exe" "release\yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe"
+        } elseif (Test-Path "dist\yysls-opencv-template-v2.exe") {
+          copy "dist\yysls-opencv-template-v2.exe" "release\yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe"
+        } else {
+          Write-Error "No executable found in dist directory"
+          exit 1
+        }
         
         # Copy config and templates
         copy "crop_config.json" "release\"

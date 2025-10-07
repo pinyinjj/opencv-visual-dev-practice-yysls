@@ -27,33 +27,58 @@ def build_exe():
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
     
     # Use custom spec file for manifest support
-    cmd = [
-        "pyinstaller",
-        "yysls-opencv-template.spec"  # Use custom spec file with manifest
-    ]
+    spec_file = "yysls-opencv-template.spec"
+    if not os.path.exists(spec_file):
+        print(f"Warning: {spec_file} not found, using default PyInstaller options")
+        cmd = [
+            "pyinstaller",
+            "--onefile",
+            "--windowed",
+            "--name=yysls-opencv-template",
+            "--add-data=templates;templates",
+            "--add-data=crop_config.json;.",
+            "--add-data=app.manifest;.",
+            "--hidden-import=cv2",
+            "--hidden-import=numpy",
+            "--hidden-import=mss",
+            "--hidden-import=psutil",
+            "--hidden-import=pydirectinput",
+            "--hidden-import=win32gui",
+            "--hidden-import=win32process",
+            "--hidden-import=pystray",
+            "--hidden-import=PIL",
+            "--hidden-import=PIL.Image",
+            "--hidden-import=PIL.ImageDraw",
+            "main.py"
+        ]
+    else:
+        cmd = [
+            "pyinstaller",
+            spec_file
+        ]
     
     print("Building executable...")
     print("Command:", " ".join(cmd))
     
     try:
         subprocess.check_call(cmd)
-        print("\n✅ Build completed successfully!")
+        print("\nBuild completed successfully!")
         
         # Get version info for output
         version = version_info.get("VERSION", "unknown")
         build_date = version_info.get("BUILD_DATE", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         
-        print(f"📦 Version: {version}")
-        print(f"📅 Build Date: {build_date}")
-        print("📁 Executable location: dist/yysls-opencv-template-v2.exe")
-        print("\n📋 Usage:")
-        print("1. Copy dist/yysls-opencv-template-v2.exe to your desired location")
+        print(f"Version: {version}")
+        print(f"Build Date: {build_date}")
+        print("Executable location: dist/yysls-opencv-template.exe")
+        print("\nUsage:")
+        print("1. Copy dist/yysls-opencv-template.exe to your desired location")
         print("2. Copy crop_config.json to the same folder")
         print("3. Copy templates/ folder to the same location")
-        print("4. Run yysls-opencv-template-v2.exe")
+        print("4. Run yysls-opencv-template.exe")
         
     except subprocess.CalledProcessError as e:
-        print(f"❌ Build failed: {e}")
+        print(f"Build failed: {e}")
         return False
     
     return True
