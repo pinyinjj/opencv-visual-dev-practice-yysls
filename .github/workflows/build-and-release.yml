@@ -125,31 +125,14 @@ jobs:
         tag_name: ${{ steps.version.outputs.TAG_NAME }}
         name: ${{ steps.version.outputs.RELEASE_NAME }}
         body: |
-          ## 🚀 新版本发布
-          
-          ### 主要功能
-          - ✅ 自动QTE检测
-          - ✅ 系统托盘控制
-          - ✅ 预览窗口切换
-          - ✅ 按键操作开关
-          - ✅ 管理员权限运行
-          
-          ### 使用方法
+          ## 使用方法
           1. 下载 `yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe`
           2. 下载 `crop_config.json` 和 `templates/` 文件夹
           3. 将所有文件放在同一目录
           4. 运行可执行文件
-          
-          ### 版本信息
-          - **版本**: ${{ steps.version.outputs.VERSION_NUMBER }}
-          - **构建时间**: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
-          - **提交**: ${{ github.sha }}
-          
-          ### 更新日志
-          - 重构代码架构，移除全局变量
-          - 添加系统托盘功能
-          - 实现启动通知
-          - 优化构建流程
+
+          ## 更新日志
+          -
         files: |
           release/*
         draft: false
