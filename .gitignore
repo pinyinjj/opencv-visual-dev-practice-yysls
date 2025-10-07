@@ -5,7 +5,9 @@
 # Build directories
 build/
 dist/
-*.spec
+
+# Keep spec files for CI/CD
+# *.spec
 
 # Python cache
 __pycache__/
