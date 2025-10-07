@@ -43,7 +43,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='yysls-opencv-template-v2',
+    name='yysls-opencv-template',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

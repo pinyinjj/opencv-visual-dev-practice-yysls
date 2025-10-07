@@ -84,13 +84,21 @@ jobs:
         # Create release directory
         mkdir release
         
+        # Debug: List dist directory contents
+        Write-Host "Contents of dist directory:"
+        Get-ChildItem "dist\" | ForEach-Object { Write-Host "  $($_.Name)" }
+        
         # Copy executable
         if (Test-Path "dist\yysls-opencv-template.exe") {
+          Write-Host "Found yysls-opencv-template.exe"
           copy "dist\yysls-opencv-template.exe" "release\yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe"
         } elseif (Test-Path "dist\yysls-opencv-template-v2.exe") {
+          Write-Host "Found yysls-opencv-template-v2.exe"
           copy "dist\yysls-opencv-template-v2.exe" "release\yysls-opencv-template-${{ steps.version.outputs.VERSION_NUMBER }}.exe"
         } else {
           Write-Error "No executable found in dist directory"
+          Write-Host "Available files in dist:"
+          Get-ChildItem "dist\" | ForEach-Object { Write-Host "  $($_.Name)" }
           exit 1
         }
         

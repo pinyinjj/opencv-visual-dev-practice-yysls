@@ -64,6 +64,19 @@ def build_exe():
         subprocess.check_call(cmd)
         print("\nBuild completed successfully!")
         
+        # Check if executable was created
+        exe_path = "dist/yysls-opencv-template.exe"
+        if os.path.exists(exe_path):
+            print(f"✅ Executable created: {exe_path}")
+        else:
+            print(f"❌ Executable not found: {exe_path}")
+            print("Checking dist directory contents:")
+            if os.path.exists("dist"):
+                for file in os.listdir("dist"):
+                    print(f"  - {file}")
+            else:
+                print("  dist directory does not exist")
+        
         # Get version info for output
         version = version_info.get("VERSION", "unknown")
         build_date = version_info.get("BUILD_DATE", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
