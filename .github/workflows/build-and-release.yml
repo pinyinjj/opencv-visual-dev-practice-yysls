@@ -8,8 +8,8 @@ on:
     branches: [ main ]
   workflow_dispatch:
     inputs:
-      major_version:
-        description: 'Major version (e.g., 2.0.0) - leave empty for auto minor version'
+      minor_version:
+        description: '指定次版本号（中间位），例如 2 表示 v1.2.x；留空则沿用当前次版本号'
         required: false
         type: string
 
@@ -41,7 +41,8 @@ jobs:
         # Get latest tag
         $latestTag = git describe --tags --abbrev=0 2>$null
         if (-not $latestTag) {
-          $latestTag = "v0.0.0"
+          # Default base version if no tags exist yet
+          $latestTag = "v1.0.0"
         }
         Write-Host "Latest tag: $latestTag"
         
@@ -52,18 +53,17 @@ jobs:
         $minor = [int]$versionParts[1]
         $patch = [int]$versionParts[2]
         
-        # Check if major version is specified
-        $inputMajor = "${{ github.event.inputs.major_version }}"
-        if ($inputMajor -and $inputMajor -ne "") {
-          $newVersion = $inputMajor
-          Write-Host "Using specified major version: $newVersion"
-        } else {
-          # Auto increment minor version
-          $minor++
-          $patch = 0
-          $newVersion = "v$major.$minor.$patch"
-          Write-Host "Auto incrementing minor version: $newVersion"
+        # Optional: user-specified minor version (middle number)
+        $inputMinor = "${{ github.event.inputs.minor_version }}"
+        if ($inputMinor -and $inputMinor -ne "") {
+          $minor = [int]$inputMinor
+          Write-Host "Using specified minor version: $minor"
         }
+
+        # Default behavior: increment patch version
+        $patch++
+        $newVersion = "v$major.$minor.$patch"
+        Write-Host "Auto incrementing patch version: $newVersion"
         
         echo "VERSION=$newVersion" >> $env:GITHUB_OUTPUT
         echo "TAG_NAME=$newVersion" >> $env:GITHUB_OUTPUT
