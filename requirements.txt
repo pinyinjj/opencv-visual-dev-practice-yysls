@@ -6,3 +6,5 @@ pydirectinput==1.0.4
 pywin32==306
 pystray==0.19.5
 Pillow==10.0.1
+PySide6==6.6.2
+PyQt-Fluent-Widgets==1.4.4

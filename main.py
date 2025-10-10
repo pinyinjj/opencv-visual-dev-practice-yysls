@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 import os
 import json
+import webbrowser
 
 import time
 import psutil
@@ -14,23 +15,63 @@ import mss
 import cv2
 import numpy as np
 import pydirectinput as pdi
-import pystray
-from PIL import Image, ImageDraw
+from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog, QMessageBox
 import sys
 pdi.PAUSE = 0.0
 
+# Try to import qfluentwidgets; fall back gracefully if unavailable or partial
+try:
+	from qfluentwidgets import (
+		RoundMenu,
+		FluentIcon,
+		setTheme,
+		Theme,
+	)
+	# MessageBox and input dialog APIs may vary across versions; import conditionally
+	try:
+		from qfluentwidgets import MessageBox as FluentMessageBox
+	except Exception:
+		FluentMessageBox = None
+	try:
+		from qfluentwidgets import FluentInputDialog
+	except Exception:
+		FluentInputDialog = None
+	QFLUENT_AVAILABLE = True
+except Exception:
+	RoundMenu = None
+	FluentIcon = None
+	setTheme = None
+	Theme = None
+	FluentMessageBox = None
+	FluentInputDialog = None
+	QFLUENT_AVAILABLE = False
+
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "crop_config.json")
+
+# Helper to safely get QIcon from FluentIcon enums
+def _fi(icon_name: str) -> QIcon:
+	try:
+		if QFLUENT_AVAILABLE and FluentIcon is not None and hasattr(FluentIcon, icon_name):
+			ico_obj = getattr(FluentIcon, icon_name)
+			# qfluentwidgets FluentIcon entries usually provide .icon()
+			if hasattr(ico_obj, 'icon'):
+				return ico_obj.icon()
+	except Exception:
+		pass
+	return QIcon()
 
 # Application state class
 class AppState:
-    def __init__(self):
-        self.config = {}
-        self.preview_enabled = False
-        self.key_actions_enabled = True
-        self.running = True
-        self.tray_icon = None
-        self.detection_thread = None
-        self.template_cache = {}
+	def __init__(self):
+		self.config = {}
+		self.preview_enabled = False
+		self.key_actions_enabled = True
+		self.running = True
+		self.tray_icon = None
+		self.detection_thread = None
+		self.template_cache = {}
+		self.qt_app = None
 
 # Global application state instance
 app_state = AppState()
@@ -38,24 +79,24 @@ app_state = AppState()
 
 
 def apply_brightness_correction(bgr_image: np.ndarray) -> np.ndarray:
-    """Apply linear gain and gamma to reduce perceived brightness.
+	"""Apply linear gain and gamma to reduce perceived brightness.
 
-    Parameters
-    - bgr_image: Input image in BGR8 format.
+	Parameters
+	- bgr_image: Input image in BGR8 format.
 
-    Returns
-    - Brightness-adjusted BGR8 image.
-    """
+	Returns
+	- Brightness-adjusted BGR8 image.
+	"""
 
-    if bgr_image is None or bgr_image.size == 0:
-        return bgr_image
-    img = bgr_image.astype(np.float32) / 255.0
-    settings = (app_state.config.get("settings") or {}) if isinstance(app_state.config, dict) else {}
-    gain = float(settings.get("brightness_gain", 1.0))
-    gamma = float(settings.get("brightness_gamma", 1.0))
-    img *= gain
-    img = np.power(np.clip(img, 0.0, 1.0), gamma)
-    return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
+	if bgr_image is None or bgr_image.size == 0:
+		return bgr_image
+	img = bgr_image.astype(np.float32) / 255.0
+	settings = (app_state.config.get("settings") or {}) if isinstance(app_state.config, dict) else {}
+	gain = float(settings.get("brightness_gain", 1.0))
+	gamma = float(settings.get("brightness_gamma", 1.0))
+	img *= gain
+	img = np.power(np.clip(img, 0.0, 1.0), gamma)
+	return (np.clip(img, 0.0, 1.0) * 255.0).astype(np.uint8)
 
  
 def _load_match_templates() -> list:
@@ -463,24 +504,65 @@ def nested_check_yysls() -> Tuple[bool, bool]:
     return True, active_foreground
 
 
-def create_tray_icon():
-    """Create system tray icon"""
-    # Create a simple icon
-    image = Image.new('RGB', (64, 64), color='blue')
-    draw = ImageDraw.Draw(image)
-    draw.ellipse([16, 16, 48, 48], fill='white', outline='black')
-    draw.text((20, 20), "自动QTE", fill='black')
+def _build_qicon() -> QIcon:
+    """Create a simple tray icon pixmap."""
+    size = 64
+    pixmap = QPixmap(size, size)
+    pixmap.fill(QColor("blue"))
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setPen(QColor("black"))
+    painter.setBrush(QColor("white"))
+    painter.drawEllipse(16, 16, 32, 32)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def create_qt_tray_icon() -> QSystemTrayIcon:
+    """Create system tray icon with Fluent Design menu when available."""
+    tray = QSystemTrayIcon(_build_qicon())
+    tray.setToolTip("YYSLS OpenCV Template")
+
+    # Prefer RoundMenu when available; otherwise fall back to QMenu
+    menu = RoundMenu() if QFLUENT_AVAILABLE and RoundMenu is not None else QMenu()
     
-    # Create menu with dynamic status
-    menu = pystray.Menu(
-        pystray.MenuItem("状态: 运行中", lambda: None),
-        pystray.MenuItem(lambda text: f"切换预览 ({'开' if app_state.preview_enabled else '关'})", toggle_preview),
-        pystray.MenuItem(lambda text: f"切换按键操作 ({'开' if app_state.key_actions_enabled else '关'})", toggle_key_actions),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("退出", quit_app)
-    )
-    
-    return pystray.Icon("yysls-opencv-template", image, "YYSLS OpenCV Template", menu)
+    # Status (disabled)
+    status_action = QAction(_fi('INFO'), "状态: 运行中", menu) if QFLUENT_AVAILABLE else QAction("状态: 运行中", menu)
+    status_action.setEnabled(False)
+    menu.addAction(status_action)
+
+    def toggle_preview_wrapped():
+        toggle_preview(None, None)
+        update_tray_menu()
+
+    def toggle_key_actions_wrapped():
+        toggle_key_actions(None, None)
+        update_tray_menu()
+
+    # Preview toggle
+    preview_action = QAction(_fi('VIEW'), f"切换预览 ({'开' if app_state.preview_enabled else '关'})", menu) if QFLUENT_AVAILABLE else QAction(f"切换预览 ({'开' if app_state.preview_enabled else '关'})", menu)
+    preview_action.triggered.connect(toggle_preview_wrapped)
+    menu.addAction(preview_action)
+
+    # Key actions toggle
+    key_action = QAction(_fi('KEYBOARD'), f"切换按键操作 ({'开' if app_state.key_actions_enabled else '关'})", menu) if QFLUENT_AVAILABLE else QAction(f"切换按键操作 ({'开' if app_state.key_actions_enabled else '关'})", menu)
+    key_action.triggered.connect(toggle_key_actions_wrapped)
+    menu.addAction(key_action)
+
+    # Shefu input
+    shefu_action = QAction(_fi('SEARCH'), "射覆", menu) if QFLUENT_AVAILABLE else QAction("射覆", menu)
+    shefu_action.triggered.connect(on_shefu_click_qt)
+    menu.addAction(shefu_action)
+
+    menu.addSeparator()
+
+    # Quit
+    quit_action = QAction(_fi('CLOSE'), "退出", menu) if QFLUENT_AVAILABLE else QAction("退出", menu)
+    quit_action.triggered.connect(lambda: quit_app_qt(tray))
+    menu.addAction(quit_action)
+
+    tray.setContextMenu(menu)
+    return tray
 
 def toggle_preview(icon, item):
     """Toggle preview window"""
@@ -497,23 +579,58 @@ def toggle_key_actions(icon, item):
     update_tray_menu()
 
 def update_tray_menu():
-    """Update tray menu to reflect current status"""
-    if app_state.tray_icon:
-        # Create new menu with updated status
-        menu = pystray.Menu(
-            pystray.MenuItem("状态: 运行中", lambda: None),
-            pystray.MenuItem(lambda text: f"切换预览 ({'开' if app_state.preview_enabled else '关'})", toggle_preview),
-            pystray.MenuItem(lambda text: f"切换按键操作 ({'开' if app_state.key_actions_enabled else '关'})", toggle_key_actions),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("退出", quit_app)
-        )
-        app_state.tray_icon.menu = menu
+    """Update tray menu text to reflect current status."""
+    if isinstance(app_state.tray_icon, QSystemTrayIcon):
+        menu = app_state.tray_icon.contextMenu()
+        if menu is None:
+            return
+        actions = menu.actions()
+        # Expected order: [status(disabled), preview, key, shefu, sep, quit]
+        if len(actions) >= 3:
+            actions[1].setText(f"切换预览 ({'开' if app_state.preview_enabled else '关'})")
+            actions[2].setText(f"切换按键操作 ({'开' if app_state.key_actions_enabled else '关'})")
 
-def quit_app(icon, item):
-    """Quit application"""
-    app_state.running = False
-    icon.stop()
-    sys.exit(0)
+
+def on_shefu_click_qt():
+    """Handle "射覆" menu click: open Tencent Docs webpage directly."""
+    try:
+        print("正在打开腾讯文档...")
+        webbrowser.open("https://docs.qq.com/sheet/DV3FUdUp5ZmpZcmhS")
+        print("腾讯文档已在浏览器中打开")
+    except Exception as e:
+        try:
+            print(f"打开网页失败: {e}")
+        except Exception:
+            pass
+
+
+def _show_message_info(title: str, content: str) -> None:
+    """Show information message using Fluent when available; fallback to QMessageBox."""
+    if QFLUENT_AVAILABLE and FluentMessageBox is not None:
+        try:
+            msg_box = FluentMessageBox(title=title, content=content, parent=None)
+            if (FluentIcon is not None) and hasattr(FluentIcon, 'INFO') and hasattr(msg_box, 'setIcon'):
+                msg_box.setIcon(FluentIcon.INFO)
+            msg_box.exec()
+            return
+        except Exception:
+            pass
+    # Fallback
+    QMessageBox.information(None, title, content)
+
+
+def quit_app_qt(tray: QSystemTrayIcon):
+	"""Quit application immediately from tray."""
+	try:
+		app_state.running = False
+		if isinstance(tray, QSystemTrayIcon):
+			tray.hide()
+		if app_state.qt_app is not None:
+			app_state.qt_app.quit()
+		sys.exit(0)
+	except Exception as e:
+		print(f"退出失败: {e}")
+		sys.exit(0)
 
 def detect_loop_tray() -> None:
     """Run the main capture/match loop with tray control."""
@@ -637,39 +754,56 @@ def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] 
             cv2.destroyAllWindows()
 
 def show_startup_notification():
-    """Show system notification when application starts"""
+    """Show startup notification using system tray."""
     try:
-        # Use Windows message box for notification
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(
-            0, 
-            "自动QTE检测已启动，可通过系统托盘控制", 
-            "YYSLS OpenCV Template", 
-            0x40  # MB_ICONINFORMATION
+        # Use system tray notification instead of popup window
+        app_state.tray_icon.showMessage(
+            "燕云十六声 剧情模式QTE助手",
+            "已启动，可通过系统托盘控制",
+            QSystemTrayIcon.Information,
+            3000  # Show for 3 seconds
         )
-    except Exception as e:
-        print(f"通知发送失败: {e}")
-        # Fallback to simple print
         print("🔔 YYSLS OpenCV Template - 自动QTE检测已启动，可通过系统托盘控制")
-        print("📝 版本: 1.0.1 - 测试GitHub Actions构建")
+    except Exception as e:
+        print(f"系统通知发送失败: {e}")
+        print("🔔 YYSLS OpenCV Template - 自动QTE检测已启动，可通过系统托盘控制")
+
 
 def main():
-    """Main function with tray icon"""
-    # Show startup notification
-    show_startup_notification()
-    
-    # Create and start tray icon
-    app_state.tray_icon = create_tray_icon()
-    
+    """Main function with Fluent Design tray icon when available"""
+    # Initialize Qt app first
+    app_state.qt_app = QApplication(sys.argv)
+    # Prevent app from exiting when dialogs close (tray-only app)
+    try:
+        app_state.qt_app.setQuitOnLastWindowClosed(False)
+    except Exception:
+        pass
+    # Apply Fluent theme if available
+    if QFLUENT_AVAILABLE and setTheme is not None and Theme is not None:
+        try:
+            setTheme(getattr(Theme, 'AUTO', None) or Theme.DARK)
+        except Exception:
+            pass
+
+    # Create tray
+    app_state.tray_icon = create_qt_tray_icon()
+    app_state.tray_icon.show()
+
     # Start detection in a separate thread
     app_state.detection_thread = threading.Thread(target=detect_loop_tray, daemon=True)
     app_state.detection_thread.start()
-    
-    # Run tray icon (this blocks until quit)
-    app_state.tray_icon.run()
+
+    # Show startup notification after app is ready
+    show_startup_notification()
+
+    # Run Qt event loop (blocks until quit)
+    exit_code = app_state.qt_app.exec()
+    sys.exit(exit_code)
+
+
+
+
+
 
 if __name__ == "__main__":
     main()
-
-
-

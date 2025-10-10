@@ -34,7 +34,7 @@ def build_exe():
             "pyinstaller",
             "--onefile",
             "--windowed",
-            "--name=yysls-opencv-template",
+            "--name=燕云十六声 剧情模式QTE助手",
             "--add-data=templates;templates",
             "--add-data=crop_config.json;.",
             "--add-data=app.manifest;.",
@@ -65,7 +65,7 @@ def build_exe():
         print("\nBuild completed successfully!")
         
         # Check if executable was created
-        exe_path = "dist/yysls-opencv-template.exe"
+        exe_path = "dist/燕云十六声 剧情模式QTE助手.exe"
         if os.path.exists(exe_path):
             print(f"Executable created: {exe_path}")
         else:
@@ -85,12 +85,12 @@ def build_exe():
         
         print(f"Version: {version}")
         print(f"Build Date: {build_date}")
-        print("Executable location: dist/yysls-opencv-template.exe")
+        print("Executable location: dist/燕云十六声 剧情模式QTE助手.exe")
         print("\nUsage:")
-        print("1. Copy dist/yysls-opencv-template.exe to your desired location")
+        print("1. Copy dist/燕云十六声 剧情模式QTE助手.exe to your desired location")
         print("2. Copy crop_config.json to the same folder")
         print("3. Copy templates/ folder to the same location")
-        print("4. Run yysls-opencv-template.exe")
+        print("4. Run 燕云十六声 剧情模式QTE助手.exe")
         
     except subprocess.CalledProcessError as e:
         print(f"Build failed: {e}")
