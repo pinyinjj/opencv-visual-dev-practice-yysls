@@ -2,6 +2,7 @@
 Build script for creating executable from yysls-opencv-template
 """
 import os
+import shutil
 import subprocess
 import sys
 import json
@@ -40,7 +41,7 @@ def build_exe():
             "pyinstaller",
             "--onefile",
             "--windowed",
-            "--name=燕云十六声 剧情模式QTE助手",
+            "--name=YYSLS-UsefulTools",
             "--add-data=templates;templates",
             "--add-data=crop_config.json;.",
             "--add-data=app.manifest;.",
@@ -71,7 +72,7 @@ def build_exe():
         print("\nBuild completed successfully!")
         
         # Check if executable was created
-        exe_name = "燕云十六声 剧情模式QTE助手.exe"
+        exe_name = "YYSLS-UsefulTools.exe"
         exe_path = os.path.join("dist", exe_name)
         
         # List all files in dist directory to debug
@@ -101,6 +102,16 @@ def build_exe():
         version = version_info.get("VERSION", "unknown")
         build_date = version_info.get("BUILD_DATE", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         
+        # Prepare release directory with single executable
+        try:
+            release_dir = os.path.join(os.getcwd(), "release")
+            os.makedirs(release_dir, exist_ok=True)
+            dst_release = os.path.join(release_dir, os.path.basename(exe_path))
+            shutil.copy2(exe_path, dst_release)
+            print(f"Release artifact: {dst_release}")
+        except Exception as rel_err:
+            print(f"Warning: failed to prepare release artifact: {rel_err}")
+
         print(f"Version: {version}")
         print(f"Build Date: {build_date}")
         print(f"Executable location: {exe_path}")
