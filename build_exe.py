@@ -71,18 +71,30 @@ def build_exe():
         print("\nBuild completed successfully!")
         
         # Check if executable was created
-        exe_path = "dist/燕云十六声 剧情模式QTE助手.exe"
-        if os.path.exists(exe_path):
-            print("Executable created: dist/燕云十六声 剧情模式QTE助手.exe")
-        else:
-            print("Executable not found: dist/燕云十六声 剧情模式QTE助手.exe")
-            print("Checking dist directory contents:")
-            if os.path.exists("dist"):
-                for file in os.listdir("dist"):
-                    print(f"  - {file}")
+        exe_name = "燕云十六声 剧情模式QTE助手.exe"
+        exe_path = os.path.join("dist", exe_name)
+        
+        # List all files in dist directory to debug
+        if os.path.exists("dist"):
+            dist_files = os.listdir("dist")
+            print(f"Files in dist directory: {dist_files}")
+            
+            # Check if any .exe file exists
+            exe_files = [f for f in dist_files if f.endswith('.exe')]
+            if exe_files:
+                print(f"Found executable files: {exe_files}")
+                if exe_name in exe_files:
+                    print(f"Executable created: dist/{exe_name}")
+                else:
+                    print(f"Expected: {exe_name}")
+                    print(f"Found: {exe_files[0]}")
+                    # Update exe_path to the actual file found
+                    exe_path = os.path.join("dist", exe_files[0])
             else:
-                print("  dist directory does not exist")
-            # Fail fast if the executable was not produced
+                print("No executable files found in dist directory")
+                sys.exit(1)
+        else:
+            print("dist directory does not exist")
             sys.exit(1)
         
         # Get version info for output
@@ -91,12 +103,12 @@ def build_exe():
         
         print(f"Version: {version}")
         print(f"Build Date: {build_date}")
-        print("Executable location: dist/燕云十六声 剧情模式QTE助手.exe")
+        print(f"Executable location: {exe_path}")
         print("\nUsage:")
-        print("1. Copy dist/燕云十六声 剧情模式QTE助手.exe to your desired location")
+        print(f"1. Copy {exe_path} to your desired location")
         print("2. Copy crop_config.json to the same folder")
         print("3. Copy templates/ folder to the same location")
-        print("4. Run 燕云十六声 剧情模式QTE助手.exe")
+        print(f"4. Run {os.path.basename(exe_path)}")
         
     except subprocess.CalledProcessError as e:
         print(f"Build failed: {e}")
