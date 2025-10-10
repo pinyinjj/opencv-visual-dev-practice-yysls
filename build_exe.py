@@ -7,6 +7,12 @@ import sys
 import json
 from datetime import datetime
 
+# Set console encoding to UTF-8 for Windows
+if sys.platform == "win32":
+    import codecs
+    sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
+    sys.stderr = codecs.getwriter("utf-8")(sys.stderr.detach())
+
 def build_exe():
     """Build executable using PyInstaller for yysls-opencv-template"""
     
@@ -67,9 +73,9 @@ def build_exe():
         # Check if executable was created
         exe_path = "dist/燕云十六声 剧情模式QTE助手.exe"
         if os.path.exists(exe_path):
-            print(f"Executable created: {exe_path}")
+            print("Executable created: dist/燕云十六声 剧情模式QTE助手.exe")
         else:
-            print(f"Executable not found: {exe_path}")
+            print("Executable not found: dist/燕云十六声 剧情模式QTE助手.exe")
             print("Checking dist directory contents:")
             if os.path.exists("dist"):
                 for file in os.listdir("dist"):
