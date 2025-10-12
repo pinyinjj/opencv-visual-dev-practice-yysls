@@ -67,7 +67,7 @@ jobs:
         
         echo "VERSION=$newVersion" >> $env:GITHUB_OUTPUT
         echo "TAG_NAME=$newVersion" >> $env:GITHUB_OUTPUT
-        echo "RELEASE_NAME=YYSLS OpenCV Template $newVersion" >> $env:GITHUB_OUTPUT
+        echo "RELEASE_NAME=燕云十六声-实用小工具集 $newVersion" >> $env:GITHUB_OUTPUT
         echo "VERSION_NUMBER=$($newVersion -replace 'v', '')" >> $env:GITHUB_OUTPUT
     
     - name: Create version file

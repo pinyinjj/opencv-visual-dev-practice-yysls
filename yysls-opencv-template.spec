@@ -10,6 +10,7 @@ a = Analysis(
         ('templates', 'templates'),
         ('crop_config.json', '.'),
         ('app.manifest', '.'),
+        ('icon.png', '.'),
     ],
     hiddenimports=[
         'cv2',
@@ -51,7 +52,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='燕云十六声 剧情模式QTE助手',
+    name='YYSLS-UsefulTools',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -65,6 +66,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     manifest='app.manifest',
-    icon=None,
+    icon='icon.png',
     uac_admin=True,
 )

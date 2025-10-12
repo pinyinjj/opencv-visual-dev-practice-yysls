@@ -45,6 +45,7 @@ def build_exe():
             "--add-data=templates;templates",
             "--add-data=crop_config.json;.",
             "--add-data=app.manifest;.",
+            "--add-data=icon.png;.",
             "--hidden-import=cv2",
             "--hidden-import=numpy",
             "--hidden-import=mss",
@@ -105,12 +106,26 @@ def build_exe():
         # Prepare release directory with single executable
         try:
             release_dir = os.path.join(os.getcwd(), "release")
-            os.makedirs(release_dir, exist_ok=True)
+            
+            # Check if release directory exists and handle it properly
+            if os.path.exists(release_dir):
+                print(f"Release directory already exists: {release_dir}")
+                # Clean up any existing files in the release directory
+                for file in os.listdir(release_dir):
+                    file_path = os.path.join(release_dir, file)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                        print(f"Removed existing file: {file}")
+            else:
+                os.makedirs(release_dir, exist_ok=True)
+                print(f"Created release directory: {release_dir}")
+            
             dst_release = os.path.join(release_dir, os.path.basename(exe_path))
             shutil.copy2(exe_path, dst_release)
             print(f"Release artifact: {dst_release}")
         except Exception as rel_err:
             print(f"Warning: failed to prepare release artifact: {rel_err}")
+            # Continue execution even if release preparation fails
 
         print(f"Version: {version}")
         print(f"Build Date: {build_date}")

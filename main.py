@@ -5,6 +5,8 @@ from typing import Optional, Tuple
 import os
 import json
 import webbrowser
+import subprocess
+import getpass
 
 import time
 import psutil
@@ -17,8 +19,10 @@ import numpy as np
 import pydirectinput as pdi
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog, QMessageBox
+from PySide6.QtCore import QPoint
 import sys
 pdi.PAUSE = 0.0
+
 
 # Try to import qfluentwidgets; fall back gracefully if unavailable or partial
 try:
@@ -505,23 +509,116 @@ def nested_check_yysls() -> Tuple[bool, bool]:
 
 
 def _build_qicon() -> QIcon:
-    """Create a simple tray icon pixmap."""
+    """Create a tray icon using icon.png or fallback to FluentIcon."""
+    # Try to load icon.png first
+    icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+    if os.path.exists(icon_path):
+        try:
+            pixmap = QPixmap(icon_path)
+            if not pixmap.isNull():
+                return QIcon(pixmap)
+        except Exception:
+            pass
+    
+    # Fallback: Try FluentIcon - look for sword/weapon related icons
+    sword_icons = ['SWORD', 'WEAPON', 'TOOL', 'GAME', 'CONTROLLER', 'GAMEPAD']
+    for icon_name in sword_icons:
+        icon = _fi(icon_name)
+        if not icon.isNull():
+            return icon
+    
+    # Try other suitable icons
+    fallback_icons = ['SETTINGS', 'TOOLS', 'APPLICATION', 'APP']
+    for icon_name in fallback_icons:
+        icon = _fi(icon_name)
+        if not icon.isNull():
+            return icon
+    
+    # Final fallback: create a simple sword icon
     size = 64
     pixmap = QPixmap(size, size)
-    pixmap.fill(QColor("blue"))
+    pixmap.fill(QColor(0, 0, 0, 0))  # Transparent background
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.Antialiasing)
-    painter.setPen(QColor("black"))
-    painter.setBrush(QColor("white"))
-    painter.drawEllipse(16, 16, 32, 32)
+    
+    # Draw sword
+    # Sword blade (vertical)
+    painter.setPen(QColor(192, 192, 192))  # Silver
+    painter.setBrush(QColor(192, 192, 192))
+    painter.drawRect(30, 10, 4, 35)
+    
+    # Sword tip
+    painter.drawPolygon([
+        QPoint(28, 45), QPoint(36, 45), QPoint(32, 50)
+    ])
+    
+    # Guard (horizontal)
+    painter.setPen(QColor(255, 215, 0))  # Gold
+    painter.setBrush(QColor(255, 215, 0))
+    painter.drawRect(24, 8, 16, 3)
+    
+    # Handle
+    painter.setPen(QColor(139, 69, 19))  # Brown
+    painter.setBrush(QColor(139, 69, 19))
+    painter.drawRect(29, 2, 6, 8)
+    
+    # Pommel
+    painter.setPen(QColor(255, 215, 0))  # Gold
+    painter.setBrush(QColor(255, 215, 0))
+    painter.drawRect(28, 0, 8, 3)
+    
     painter.end()
     return QIcon(pixmap)
 
 
+class CustomTrayIcon(QSystemTrayIcon):
+    """Custom tray icon with positioned context menu"""
+    
+    def __init__(self, icon, parent=None):
+        super().__init__(icon, parent)
+        self.setToolTip("燕云十六声-实用小工具集")
+        self.menu = None
+        
+    def setContextMenu(self, menu):
+        """Override to store menu reference and connect activation signal"""
+        self.menu = menu
+        # Don't call super().setContextMenu() to prevent default behavior
+        # Instead, connect to the activation signal
+        self.activated.connect(self.onActivated)
+        
+    def onActivated(self, reason):
+        """Handle tray icon activation"""
+        if reason == QSystemTrayIcon.Context and self.menu:
+            # Get cursor position
+            from PySide6.QtGui import QCursor
+            cursor_pos = QCursor.pos()
+            
+            # Get menu size
+            menu_size = self.menu.sizeHint()
+            
+            # Calculate position (top-right of cursor position)
+            x = cursor_pos.x() - menu_size.width() + 20  # Offset to show at top-right
+            y = cursor_pos.y() - menu_size.height() - 10  # Offset above cursor position
+            
+            # Ensure menu stays within screen bounds
+            screen = QApplication.primaryScreen().geometry()
+            
+            # Adjust if menu would go off screen
+            if x < 0:
+                x = cursor_pos.x() + 10  # Show to the right of cursor
+            if y < 0:
+                y = cursor_pos.y() + 10  # Show below cursor
+            if x + menu_size.width() > screen.width():
+                x = screen.width() - menu_size.width() - 10
+            if y + menu_size.height() > screen.height():
+                y = screen.height() - menu_size.height() - 10
+            
+            # Show menu at calculated position
+            self.menu.exec(QPoint(x, y))
+
 def create_qt_tray_icon() -> QSystemTrayIcon:
     """Create system tray icon with Fluent Design menu when available."""
-    tray = QSystemTrayIcon(_build_qicon())
-    tray.setToolTip("YYSLS OpenCV Template")
+    tray = CustomTrayIcon(_build_qicon())
 
     # Prefer RoundMenu when available; otherwise fall back to QMenu
     menu = RoundMenu() if QFLUENT_AVAILABLE and RoundMenu is not None else QMenu()
@@ -549,10 +646,42 @@ def create_qt_tray_icon() -> QSystemTrayIcon:
     key_action.triggered.connect(toggle_key_actions_wrapped)
     menu.addAction(key_action)
 
+
     # Shefu input
     shefu_action = QAction(_fi('SEARCH'), "射覆", menu) if QFLUENT_AVAILABLE else QAction("射覆", menu)
     shefu_action.triggered.connect(on_shefu_click_qt)
     menu.addAction(shefu_action)
+
+    # Open yysls config folder
+    def open_yysls_config():
+        """Open yysls config directory"""
+        try:
+            username = getpass.getuser()
+            config_path = f"C:\\Users\\{username}\\AppData\\Roaming\\yysls"
+            
+            # Create directory if it doesn't exist
+            if not os.path.exists(config_path):
+                os.makedirs(config_path, exist_ok=True)
+                print(f"创建yysls配置目录: {config_path}")
+            
+            # Open directory in file explorer
+            # Note: explorer command may return non-zero exit status even when successful
+            result = subprocess.run(['explorer', config_path], capture_output=True, text=True)
+            if result.returncode == 0:
+                print(f"打开相册: {config_path}")
+            else:
+                # Even if return code is non-zero, explorer might have succeeded
+                # Check if the directory exists and assume success
+                if os.path.exists(config_path):
+                    print(f"打开相册: {config_path}")
+                else:
+                    print(f"打开相册失败: {result.stderr}")
+        except Exception as e:
+            print(f"打开相册失败: {e}")
+    
+    config_action = QAction(_fi('PHOTO'), "打开相册", menu) if QFLUENT_AVAILABLE else QAction("打开相册", menu)
+    config_action.triggered.connect(open_yysls_config)
+    menu.addAction(config_action)
 
     menu.addSeparator()
 
@@ -578,6 +707,9 @@ def toggle_key_actions(icon, item):
     # Update menu to reflect new status
     update_tray_menu()
 
+
+
+
 def update_tray_menu():
     """Update tray menu text to reflect current status."""
     if isinstance(app_state.tray_icon, QSystemTrayIcon):
@@ -586,7 +718,7 @@ def update_tray_menu():
             return
         actions = menu.actions()
         # Expected order: [status(disabled), preview, key, shefu, sep, quit]
-        if len(actions) >= 3:
+        if len(actions) >= 4:
             actions[1].setText(f"切换预览 ({'开' if app_state.preview_enabled else '关'})")
             actions[2].setText(f"切换按键操作 ({'开' if app_state.key_actions_enabled else '关'})")
 
@@ -758,15 +890,15 @@ def show_startup_notification():
     try:
         # Use system tray notification instead of popup window
         app_state.tray_icon.showMessage(
-            "燕云十六声 剧情模式QTE助手",
+            "燕云十六声-实用小工具集",
             "已启动，可通过系统托盘控制",
             QSystemTrayIcon.Information,
             3000  # Show for 3 seconds
         )
-        print("🔔 YYSLS OpenCV Template - 自动QTE检测已启动，可通过系统托盘控制")
+        print("🔔 燕云十六声-实用小工具集 - 自动QTE检测已启动，可通过系统托盘控制")
     except Exception as e:
         print(f"系统通知发送失败: {e}")
-        print("🔔 YYSLS OpenCV Template - 自动QTE检测已启动，可通过系统托盘控制")
+        print("🔔 燕云十六声-实用小工具集 - 自动QTE检测已启动，可通过系统托盘控制")
 
 
 def main():
@@ -796,8 +928,11 @@ def main():
     # Show startup notification after app is ready
     show_startup_notification()
 
+
     # Run Qt event loop (blocks until quit)
     exit_code = app_state.qt_app.exec()
+    
+    
     sys.exit(exit_code)
 
 
