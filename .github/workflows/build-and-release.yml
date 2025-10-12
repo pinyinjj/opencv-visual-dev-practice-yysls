@@ -84,8 +84,11 @@ jobs:
     - name: Create release assets
       shell: pwsh
       run: |
-        # Create release directory
-        mkdir release
+        # Create release directory (remove if exists first)
+        if (Test-Path "release") {
+          Remove-Item "release" -Recurse -Force
+        }
+        New-Item -ItemType Directory -Name "release"
         
         # Debug: List dist directory contents
         Write-Host "Contents of dist directory:"
