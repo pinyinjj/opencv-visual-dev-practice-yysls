@@ -510,8 +510,8 @@ def nested_check_yysls() -> Tuple[bool, bool]:
 
 def _build_qicon() -> QIcon:
     """Create a tray icon using icon.png or fallback to FluentIcon."""
-    # Try to load icon.png first
-    icon_path = os.path.join(os.path.dirname(__file__), "icon.png")
+    # Try to load icon.ico first
+    icon_path = os.path.join(os.path.dirname(__file__), "icon.ico")
     if os.path.exists(icon_path):
         try:
             pixmap = QPixmap(icon_path)

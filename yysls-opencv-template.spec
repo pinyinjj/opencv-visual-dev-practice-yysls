@@ -10,7 +10,7 @@ a = Analysis(
         ('templates', 'templates'),
         ('crop_config.json', '.'),
         ('app.manifest', '.'),
-        ('icon.png', '.'),
+        ('icon.ico', '.'),
     ],
     hiddenimports=[
         'cv2',
@@ -66,6 +66,6 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     manifest='app.manifest',
-    icon='icon.png',
+    icon='icon.ico',
     uac_admin=True,
 )

@@ -45,7 +45,7 @@ def build_exe():
             "--add-data=templates;templates",
             "--add-data=crop_config.json;.",
             "--add-data=app.manifest;.",
-            "--add-data=icon.png;.",
+            "--add-data=icon.ico;.",
             "--hidden-import=cv2",
             "--hidden-import=numpy",
             "--hidden-import=mss",
