@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import os
 import json
@@ -18,7 +18,7 @@ import cv2
 import numpy as np
 import pydirectinput as pdi
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QAction
-from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QInputDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu, QMessageBox
 from PySide6.QtCore import QPoint
 import sys
 pdi.PAUSE = 0.0
@@ -32,15 +32,11 @@ try:
 		setTheme,
 		Theme,
 	)
-	# MessageBox and input dialog APIs may vary across versions; import conditionally
+	# MessageBox APIs may vary across versions; import conditionally
 	try:
 		from qfluentwidgets import MessageBox as FluentMessageBox
 	except Exception:
 		FluentMessageBox = None
-	try:
-		from qfluentwidgets import FluentInputDialog
-	except Exception:
-		FluentInputDialog = None
 	QFLUENT_AVAILABLE = True
 except Exception:
 	RoundMenu = None
@@ -48,7 +44,6 @@ except Exception:
 	setTheme = None
 	Theme = None
 	FluentMessageBox = None
-	FluentInputDialog = None
 	QFLUENT_AVAILABLE = False
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), "crop_config.json")
@@ -195,28 +190,22 @@ def _build_template_cache(loaded_templates: list) -> None:
 def _match_templates_on_frame(
     bgr_frame: np.ndarray,
     loaded_templates: list,
-) -> tuple[dict, Optional[dict], dict]:
+) -> tuple[dict, dict]:
     """Match configured templates on a single BGR frame using grayscale CCOEFF_NORMED.
 
     Returns:
     - scaled_for_preview: dict[name -> gray template preview]
-    - best_overlay: optional metadata for the globally best match
-    - per_template_best_best_only: dict[name -> best match metadata] (best only)
+    - per_template_best: dict[name -> best match metadata] (best only)
     """
 
     if not loaded_templates:
-        return {}, None, {}
+        return {}, {}
 
     frame_u8 = bgr_frame
     frame_gray = cv2.cvtColor(frame_u8, cv2.COLOR_BGR2GRAY)
 
-    # Track best score across all templates/scales for this frame
+    # Track template previews and best matches per template
     scaled_for_preview: dict[str, np.ndarray] = {}
-    best_score: float = 0.0
-    best_name: Optional[str] = None
-    best_loc: Optional[Tuple[int, int]] = None
-    best_scale: float = 1.0
-    best_overlay: Optional[dict] = None
     per_template_best: dict[str, dict] = {}
 
     for entry in loaded_templates:
@@ -247,28 +236,13 @@ def _match_templates_on_frame(
         res = cv2.matchTemplate(frame_gray, work_tmpl_gray, cv2.TM_CCOEFF_NORMED)
         _, maxVal, _, maxLoc = cv2.minMaxLoc(res)
 
-        # Update current best score for this frame
-        if maxVal > best_score:
-            best_score = maxVal
-            best_name = name
-            best_loc = maxLoc
-            best_scale = float(cache.get("scale", 1.0))
-            best_overlay = {
-                "name": name,
-                "loc": maxLoc,
-                "scale": best_scale,
-                "tmpl": work_tmpl_bgr,
-                "mask": mask_resized,
-                "score": maxVal,
-                "threshold": local_threshold,
-            }
         # Track best per-template
         prev = per_template_best.get(name)
         if prev is None or maxVal > prev.get("score", 0.0):
             per_template_best[name] = {
                 "name": name,
                 "loc": maxLoc,
-                "scale": best_scale,
+                "scale": float(cache.get("scale", 1.0)),
                 "tmpl": work_tmpl_bgr,
                 "mask": mask_resized,
                 "score": maxVal,
@@ -283,9 +257,7 @@ def _match_templates_on_frame(
                 else:
                     _trigger_key_action_async(name)
 
-    # 仅暴露当前 best 的模板数据用于左侧叠加
-    best_only = {best_name: per_template_best.get(best_name)} if best_name in per_template_best else {}
-    return scaled_for_preview, best_overlay, best_only
+    return scaled_for_preview, per_template_best
 
 
 def _trigger_key_action_async(name: str, override_key: Optional[str] = None) -> None:
@@ -496,16 +468,6 @@ def is_process_foreground(process_name: str) -> bool:
     return image == process_name.lower()
 
 
-def nested_check_yysls() -> Tuple[bool, bool]:
-    """Check whether yysls.exe exists and whether it is foreground."""
-
-    name = "yysls.exe"
-    exists_running = any_process_named(name)
-    if not exists_running:
-        return False, False
-
-    active_foreground = is_process_foreground(name)
-    return True, active_foreground
 
 
 def _build_qicon() -> QIcon:
@@ -736,19 +698,6 @@ def on_shefu_click_qt():
             pass
 
 
-def _show_message_info(title: str, content: str) -> None:
-    """Show information message using Fluent when available; fallback to QMessageBox."""
-    if QFLUENT_AVAILABLE and FluentMessageBox is not None:
-        try:
-            msg_box = FluentMessageBox(title=title, content=content, parent=None)
-            if (FluentIcon is not None) and hasattr(FluentIcon, 'INFO') and hasattr(msg_box, 'setIcon'):
-                msg_box.setIcon(FluentIcon.INFO)
-            msg_box.exec()
-            return
-        except Exception:
-            pass
-    # Fallback
-    QMessageBox.information(None, title, content)
 
 
 def quit_app_qt(tray: QSystemTrayIcon):
@@ -794,7 +743,6 @@ def detect_loop_tray() -> None:
         latest_scaled: dict = {}
         per_template: dict = {}
 
-        start = time.time()
         while app_state.running:
             frame_bgra = sct.grab(region)
             frame = np.array(frame_bgra)
@@ -805,7 +753,7 @@ def detect_loop_tray() -> None:
             now = loop_start
             if loaded_templates and (now - last_match_time) >= interval:
                 last_match_time = now
-                latest_scaled, best_overlay, per_template = _match_templates_on_frame(frame, loaded_templates)
+                latest_scaled, per_template = _match_templates_on_frame(frame, loaded_templates)
 
             # show preview window for debugging (video + scaled templates)
             if app_state.preview_enabled:
@@ -823,67 +771,6 @@ def detect_loop_tray() -> None:
         if app_state.preview_enabled:
             cv2.destroyAllWindows()
 
-def detect_loop(duration_seconds: Optional[int] = None, preview: Optional[bool] = None) -> None:
-    """Run the main capture/match loop with optional preview window."""
-    with mss.mss() as sct:
-        monitor = sct.monitors[1]
-        mon_left = int(monitor.get("left", 0))
-        mon_top = int(monitor.get("top", 0))
-        mon_w = int(monitor.get("width", 0))
-        mon_h = int(monitor.get("height", 0))
-
-        _, _, _, _, resolve_for, fps = load_crop_config()
-        size_f, vertical_b, height_f = resolve_for(mon_w, mon_h)
-        side = int(max(1, min(mon_w, mon_h) * float(size_f)))
-        crop_h = int(max(1, side * float(height_f)))
-        center_x = mon_left + mon_w // 2
-        center_y = mon_top + mon_h // 2 + int(mon_h * float(vertical_b))
-
-        left = int(center_x - side // 2)
-        top = int(center_y - crop_h // 2)
-        left = max(mon_left, min(left, mon_left + mon_w - side))
-        top = max(mon_top, min(top, mon_top + mon_h - crop_h))
-
-        region = {"left": left, "top": top, "width": side, "height": crop_h}
-
-        loaded_templates = _load_match_templates()
-        _build_template_cache(loaded_templates)
-        interval = 1.0 / max(1, fps)
-        last_match_time = 0.0
-        latest_scaled: dict = {}
-        per_template: dict = {}
-        if preview is None:
-            preview = app_state.preview_enabled
-
-        start = time.time()
-        while True:
-            frame_bgra = sct.grab(region)
-            frame = np.array(frame_bgra)
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-            frame = apply_brightness_correction(frame)
-
-            loop_start = time.time()
-            now = loop_start
-            if loaded_templates and (now - last_match_time) >= interval:
-                last_match_time = now
-                latest_scaled, best_overlay, per_template = _match_templates_on_frame(frame, loaded_templates)
-
-            # show preview window for debugging (video + scaled templates)
-            if preview:
-                frame_with_overlay = _overlay_per_template(frame, per_template)
-                preview_img = _compose_unified_preview(frame_with_overlay, latest_scaled)
-                cv2.imshow("Preview", preview_img)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-
-            if duration_seconds is not None and (now - start) >= duration_seconds:
-                break
-            # pacing both capture and matching to the same fps
-            sleep_s = interval - (time.time() - loop_start)
-            if sleep_s > 0:
-                time.sleep(sleep_s)
-        if preview:
-            cv2.destroyAllWindows()
 
 def show_startup_notification():
     """Show startup notification using system tray."""
