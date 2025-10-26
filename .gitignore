@@ -39,6 +39,18 @@ venv.bak/
 .DS_Store
 Thumbs.db
 
+# Video files
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.webm
+*.mkv
+*.m4v
+*.3gp
+*.ogv
+
 # Old files
 yysls-ocr.spec
 yysls-opencv-template.exe
